@@ -1,0 +1,13 @@
+# Ambiente Virtual
+.venv/
+*.pyc
+__pycache__/
+
+# Arquivo de Segredos
+.env
+
+# Arquivos do VS Code
+.vscode/
+
+# Arquivos do Alembic (cache)
+.alembic_cache/
