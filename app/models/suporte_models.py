@@ -4,7 +4,6 @@ from decimal import Decimal
 from typing import Optional, TYPE_CHECKING
 from sqlmodel import Field, SQLModel, Relationship
 
-# Importando nossos ENUMs
 from app.models.base import (
     TipoStatusTicket, 
     TipoResolucaoTicket, 
@@ -26,16 +25,12 @@ class TicketSuporte(SQLModel, table=True):
     criado_em: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)
     atualizado_em: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False, sa_column_kwargs={"onupdate": datetime.datetime.utcnow})
 
-    # --- Chaves Estrangeiras ---
     usuario_id: uuid.UUID = Field(foreign_key="usuario.id", nullable=False)
     pedido_id: uuid.UUID = Field(foreign_key="pedido.id", nullable=False, unique=True)
     estoque_conta_id: uuid.UUID = Field(foreign_key="estoqueconta.id", nullable=False)
 
-    # --- Relacionamentos ---
     usuario: "Usuario" = Relationship(back_populates="tickets")
     estoque_conta: "EstoqueConta" = Relationship(back_populates="tickets_problema")
-    
-    # Relacionamento 1-para-1 com Pedido
     pedido: "Pedido" = Relationship(back_populates="ticket")
 
 # --- Tabela: gift_cards ---
@@ -47,20 +42,16 @@ class GiftCard(SQLModel, table=True):
     criado_em: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)
     utilizado_em: Optional[datetime.datetime] = Field(default=None)
 
-    # --- Chave Estrangeira DUPLA para a mesma tabela (Usuario) ---
     criado_por_admin_id: uuid.UUID = Field(foreign_key="usuario.id", nullable=False)
     utilizado_por_usuario_id: Optional[uuid.UUID] = Field(default=None, foreign_key="usuario.id")
 
-    # --- Relacionamentos DUPLOS (requerem configuração extra) ---
-    # Precisamos dizer ao SQLModel qual chave estrangeira usar para cada relacionamento,
-    # pois ambas apontam para a tabela 'usuario'.
-    
+    # --- Relacionamentos de Usuario (Corrigidos) ---
     criado_por_admin: "Usuario" = Relationship(
         back_populates="gift_cards_criados",
-        sa_relationship_kwargs={"foreign_keys": "[GiftCard.criado_por_admin_id]"}
+        sa_relationship_kwargs={"foreign_keys": "GiftCard.criado_por_admin_id"}
     )
     
     utilizado_por_usuario: Optional["Usuario"] = Relationship(
         back_populates="gift_cards_resgatados",
-        sa_relationship_kwargs={"foreign_keys": "[GiftCard.utilizado_por_usuario_id]"}
+        sa_relationship_kwargs={"foreign_keys": "GiftCard.utilizado_por_usuario_id"}
     )
