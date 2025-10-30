@@ -1,3 +1,22 @@
+import sys
+import os
+
+# Adiciona o diretório raiz (bot_vendas_api) ao sys.path
+# para que possamos importar 'app.core' e 'app.models'
+project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, project_dir)
+
+from sqlmodel import SQLModel
+from app.core.config import settings # Importa nossas settings (que leem o .env)
+
+# Importa TODOS os nossos models para que o SQLModel.metadata seja populado
+# O Alembic usará este metadata para "ver" nossas tabelas.
+from app.models.base import *
+from app.models.usuario_models import *
+from app.models.produto_models import *
+from app.models.pedido_models import *
+from app.models.suporte_models import *
+
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
@@ -13,12 +32,15 @@ config = context.config
 # This line sets up loggers basically.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+    # Sobrescreve a URL do .ini com a URL do nosso .env
+    # # 'config' é o objeto que guarda as configs do alembic.ini
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 # add your model's MetaData object here
 # for 'autogenerate' support
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
-target_metadata = None
+target_metadata = SQLModel.metadata
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
