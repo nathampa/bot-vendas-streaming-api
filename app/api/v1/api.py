@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
 # 1. Importa os DOIS roteadores do arquivo 'produtos'
-from app.api.v1.endpoints import produtos, auth, estoque,compras,recargas,tickets, giftcards, sugestoes
+from app.api.v1.endpoints import produtos, auth, estoque,compras,recargas,tickets, giftcards, sugestoes, dashboard
 
 # Este é o roteador principal da v1
 api_router = APIRouter()
@@ -85,6 +85,12 @@ api_router.include_router(
     tags=["Admin - Sugestões"]
 )
 
+api_router.include_router(
+    dashboard.router,
+    prefix="/admin/dashboard", 
+    tags=["Admin - Dashboard"]
+)
+
 # -------------------------------------------------
 # Rota de Autenticação
 # -------------------------------------------------
@@ -99,6 +105,6 @@ api_router.include_router(
 # -------------------------------------------------
 api_router.include_router(
     estoque.router,
-    prefix="/admin/estoque", # Ficará em /api/v1/admin/estoque
-    tags=["Admin - Estoque"] # Agrupa na documentação
+    prefix="/admin/estoque",
+    tags=["Admin - Estoque"]
 )
