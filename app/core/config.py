@@ -16,6 +16,8 @@ class Settings(BaseSettings):
 
     CELERY_BROKER_URL: str
 
+    BOT_API_KEY: str
+
     # Configuração para dizer ao Pydantic para ler do arquivo .env
     model_config = SettingsConfigDict(env_file=".env")
 

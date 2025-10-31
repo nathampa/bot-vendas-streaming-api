@@ -1,110 +1,64 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
-# 1. Importa os DOIS roteadores do arquivo 'produtos'
-from app.api.v1.endpoints import produtos, auth, estoque,compras,recargas,tickets, giftcards, sugestoes, dashboard
+# Importa todos os nossos endpoints
+from app.api.v1.endpoints import (
+    produtos, auth, estoque, recargas, compras, tickets, giftcards, sugestoes, dashboard
+)
+# Importa o nosso novo "cadeado"
+from app.api.v1.deps import get_bot_api_key
 
 # Este é o roteador principal da v1
 api_router = APIRouter()
 
-# -------------------------------------------------
-# Rota PÚBLICA do Bot
-# -------------------------------------------------
-api_router.include_router(
-    produtos.router,  # O roteador público
-    prefix="/produtos", 
-    tags=["Produtos (Bot)"]
-)
+# --- Rotas do Bot (AGORA PROTEGIDAS) ---
+bot_deps = [Depends(get_bot_api_key)]
 
 api_router.include_router(
-    recargas.router,    # O roteador de recargas
-    prefix="/recargas", 
-    tags=["Recargas (Bot)"]
+    produtos.router, prefix="/produtos", tags=["Produtos (Bot)"], dependencies=bot_deps
+)
+api_router.include_router(
+    recargas.router, prefix="/recargas", tags=["Recargas (Bot)"], dependencies=bot_deps
+)
+api_router.include_router(
+    compras.router, prefix="/compras", tags=["Compras (Bot)"], dependencies=bot_deps
+)
+api_router.include_router(
+    tickets.router, prefix="/tickets", tags=["Tickets (Bot)"], dependencies=bot_deps
+)
+api_router.include_router(
+    giftcards.router, prefix="/giftcards", tags=["GiftCards (Bot)"], dependencies=bot_deps
+)
+api_router.include_router(
+    sugestoes.router, prefix="/sugestoes", tags=["Sugestões (Bot)"], dependencies=bot_deps
 )
 
+# --- Rotas de Webhook (PÚBLICAS - SEM O CADEADO) ---
+# (O webhook de recarga NÃO PODE ter a chave de API, 
+# pois é o Mercado Pago que o chama, não o nosso bot)
 api_router.include_router(
-    compras.router,
-    prefix="/compras", 
-    tags=["Compras (Bot)"]
+    recargas.webhook_router, prefix="/webhook", tags=["Webhooks (Externo)"]
 )
 
+# --- Rotas de Admin (PROTEGIDAS PELO LOGIN JWT) ---
+# (Estas rotas usam o seu próprio cadeado JWT, por isso não mexemos)
 api_router.include_router(
-    tickets.router,
-    prefix="/tickets", 
-    tags=["Tickets (Bot)"]
+    produtos.admin_router, prefix="/admin/produtos", tags=["Admin - Produtos"]
 )
-
 api_router.include_router(
-    tickets.router,
-    prefix="/tickets", 
-    tags=["Tickets (Bot)"]
+    auth.router, prefix="/admin", tags=["Admin - Autenticação"]
 )
-
 api_router.include_router(
-    giftcards.router,
-    prefix="/giftcards", 
-    tags=["GiftCards (Bot)"]
+    estoque.router, prefix="/admin/estoque", tags=["Admin - Estoque"]
 )
-
 api_router.include_router(
-    sugestoes.router,
-    prefix="/sugestoes", 
-    tags=["Sugestões (Bot)"]
+    tickets.admin_router, prefix="/admin/tickets", tags=["Admin - Tickets"]
 )
-
-# --- Rotas de Webhook (Públicas) ---
 api_router.include_router(
-    recargas.webhook_router,
-    prefix="/webhook",
-    tags=["Webhooks (Externo)"]
+    giftcards.admin_router, prefix="/admin/giftcards", tags=["Admin - GiftCards"]
 )
-
-# -------------------------------------------------
-# Rota de ADMIN (Painel)
-# -------------------------------------------------
 api_router.include_router(
-    produtos.admin_router,
-    prefix="/admin/produtos",
-    tags=["Admin - Produtos"]
+    sugestoes.admin_router, prefix="/admin/sugestoes", tags=["Admin - Sugestões"]
 )
-
 api_router.include_router(
-    tickets.admin_router,
-    prefix="/admin/tickets", 
-    tags=["Admin - Tickets"]
-)
-
-api_router.include_router(
-    giftcards.admin_router,
-    prefix="/admin/giftcards", 
-    tags=["Admin - GiftCards"]
-)
-
-api_router.include_router(
-    sugestoes.admin_router,
-    prefix="/admin/sugestoes", 
-    tags=["Admin - Sugestões"]
-)
-
-api_router.include_router(
-    dashboard.router,
-    prefix="/admin/dashboard", 
-    tags=["Admin - Dashboard"]
-)
-
-# -------------------------------------------------
-# Rota de Autenticação
-# -------------------------------------------------
-api_router.include_router(
-    auth.router,
-    prefix="/admin", 
-    tags=["Admin - Autenticação"]
-)
-
-# -------------------------------------------------
-# Inclui o roteador de Estoque
-# -------------------------------------------------
-api_router.include_router(
-    estoque.router,
-    prefix="/admin/estoque",
-    tags=["Admin - Estoque"]
+    dashboard.router, prefix="/admin/dashboard", tags=["Admin - Dashboard"]
 )
