@@ -1,8 +1,7 @@
 from fastapi import APIRouter
 
 # 1. Importa os DOIS roteadores do arquivo 'produtos'
-from app.api.v1.endpoints import produtos, auth
-from app.api.v1.endpoints import estoque
+from app.api.v1.endpoints import produtos, auth, estoque,compras,recargas
 
 # Este é o roteador principal da v1
 api_router = APIRouter()
@@ -14,6 +13,25 @@ api_router.include_router(
     produtos.router,  # O roteador público
     prefix="/produtos", 
     tags=["Produtos (Bot)"]
+)
+
+api_router.include_router(
+    recargas.router,    # O roteador de recargas
+    prefix="/recargas", 
+    tags=["Recargas (Bot)"]
+)
+
+api_router.include_router(
+    compras.router,
+    prefix="/compras", 
+    tags=["Compras (Bot)"]
+)
+
+# --- Rotas de Webhook (Públicas) ---
+api_router.include_router(
+    recargas.webhook_router, # <-- 1. ADICIONE O NOVO ROTEADOR
+    prefix="/webhook", # <-- 2. PREFIXO DIFERENTE
+    tags=["Webhooks (Externo)"]
 )
 
 # -------------------------------------------------
