@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
 # 1. Importa os DOIS roteadores do arquivo 'produtos'
-from app.api.v1.endpoints import produtos, auth, estoque,compras,recargas,tickets, giftcards
+from app.api.v1.endpoints import produtos, auth, estoque,compras,recargas,tickets, giftcards, sugestoes
 
 # Este é o roteador principal da v1
 api_router = APIRouter()
@@ -45,10 +45,16 @@ api_router.include_router(
     tags=["GiftCards (Bot)"]
 )
 
+api_router.include_router(
+    sugestoes.router,
+    prefix="/sugestoes", 
+    tags=["Sugestões (Bot)"]
+)
+
 # --- Rotas de Webhook (Públicas) ---
 api_router.include_router(
-    recargas.webhook_router, # <-- 1. ADICIONE O NOVO ROTEADOR
-    prefix="/webhook", # <-- 2. PREFIXO DIFERENTE
+    recargas.webhook_router,
+    prefix="/webhook",
     tags=["Webhooks (Externo)"]
 )
 
@@ -56,8 +62,8 @@ api_router.include_router(
 # Rota de ADMIN (Painel)
 # -------------------------------------------------
 api_router.include_router(
-    produtos.admin_router, # O novo roteador de admin
-    prefix="/admin/produtos", # Prefixo diferente
+    produtos.admin_router,
+    prefix="/admin/produtos",
     tags=["Admin - Produtos"]
 )
 
@@ -71,6 +77,12 @@ api_router.include_router(
     giftcards.admin_router,
     prefix="/admin/giftcards", 
     tags=["Admin - GiftCards"]
+)
+
+api_router.include_router(
+    sugestoes.admin_router,
+    prefix="/admin/sugestoes", 
+    tags=["Admin - Sugestões"]
 )
 
 # -------------------------------------------------
