@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     # Chave para criptografar as senhas (lida do .env)
     AES_ENCRYPTION_KEY: str
 
+    CELERY_BROKER_URL: str
+
     # Configuração para dizer ao Pydantic para ler do arquivo .env
     model_config = SettingsConfigDict(env_file=".env")
 
