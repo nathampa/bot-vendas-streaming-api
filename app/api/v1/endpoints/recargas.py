@@ -3,6 +3,8 @@ import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
 from typing import List
+from app.models.base import TipoStatusPagamento
+from .usuarios import get_or_create_usuario
 
 from app.db.database import get_session
 from app.models.usuario_models import Usuario, RecargaSaldo
@@ -19,35 +21,6 @@ router = APIRouter()
 
 # Roteador para Webhooks (usado por gateways externos)
 webhook_router = APIRouter()
-
-# --- Função Auxiliar (Helper) ---
-def get_or_create_usuario(session: Session, telegram_id: int, nome_completo: str) -> Usuario:
-    """
-    Tenta encontrar um usuário pelo telegram_id.
-    Se não encontrar, cria um novo usuário.
-    """
-    
-    # 1. Tenta encontrar o usuário
-    usuario = session.exec(
-        select(Usuario).where(Usuario.telegram_id == telegram_id)
-    ).first()
-    
-    if usuario:
-        # Se encontrou, apenas retorna o usuário
-        return usuario
-    
-    # 2. Se não encontrou, cria um novo
-    print(f"Usuário com telegram_id {telegram_id} não encontrado. Criando novo usuário.")
-    novo_usuario = Usuario(
-        telegram_id=telegram_id,
-        nome_completo=nome_completo
-        # Saldo, is_admin, etc., já têm valores padrão no model
-    )
-    session.add(novo_usuario)
-    session.commit()
-    session.refresh(novo_usuario)
-    return novo_usuario
-# --- Fim da Função Auxiliar ---
 
 
 @router.post("/", response_model=RecargaCreateResponse)

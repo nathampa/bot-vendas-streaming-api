@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 
 # Importa todos os nossos endpoints
 from app.api.v1.endpoints import (
-    produtos, auth, estoque, recargas, compras, tickets, giftcards, sugestoes, dashboard
+    produtos, auth, estoque, recargas, compras, tickets, giftcards, sugestoes, dashboard, usuarios
 )
 # Importa o nosso novo "cadeado"
 from app.api.v1.deps import get_bot_api_key
@@ -30,6 +30,13 @@ api_router.include_router(
 )
 api_router.include_router(
     sugestoes.router, prefix="/sugestoes", tags=["Sugestões (Bot)"], dependencies=bot_deps
+)
+
+api_router.include_router(
+    usuarios.router,
+    prefix="/usuarios", 
+    tags=["Usuários (Bot)"], 
+    dependencies=bot_deps
 )
 
 # --- Rotas de Webhook (PÚBLICAS - SEM O CADEADO) ---
