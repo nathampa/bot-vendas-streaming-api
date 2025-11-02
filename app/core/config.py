@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     # Chave para criptografar as senhas (lida do .env)
     AES_ENCRYPTION_KEY: str
 
-    CELERY_BROKER_URL: str
+    #CELERY_BROKER_URL: str
 
     BOT_API_KEY: str
 

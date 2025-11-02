@@ -1,6 +1,7 @@
 import uuid
 import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from app.services.ticket_services import resolver_ticket_task
 from sqlmodel import Session, select
 from typing import List, Optional
 
@@ -20,7 +21,7 @@ from app.schemas.estoque_schemas import EstoqueAdminReadDetails as SchemaEstoque
 from app.models.base import TipoStatusTicket
 from app.api.v1.deps import get_current_admin_user # O nosso "Cadeado"
 from app.services import security # Para descriptografar
-from app.worker.celery_app import celery_app # Para chamar a tarefa
+#from app.worker.celery_app import celery_app # Para chamar a tarefa
 
 # Roteador para o Bot (criação de tickets)
 router = APIRouter()
@@ -179,6 +180,7 @@ def get_detalhe_ticket(
 @admin_router.post("/{ticket_id}/resolver", status_code=status.HTTP_202_ACCEPTED)
 def request_resolucao_ticket(
     *,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
     ticket_id: uuid.UUID,
     resolve_in: TicketResolveRequest
@@ -208,9 +210,10 @@ def request_resolucao_ticket(
     
     # 3. Enviar a tarefa para o Celery (o 'worker' fará o trabalho pesado)
     print(f"Enviando tarefa 'resolver_ticket' para o Celery: {ticket.id}, Ação: {acao}")
-    celery_app.send_task(
-        "resolver_ticket", # Nome da tarefa (que definiremos a seguir)
-        args=[str(ticket.id), acao] # Argumentos para a tarefa
+    background_tasks.add_task(
+        resolver_ticket_task,
+        ticket_id=str(ticket.id), 
+        acao=acao
     )
     
     return {"message": "Solicitação de resolução recebida.", "ticket_id": ticket.id, "acao": acao}
