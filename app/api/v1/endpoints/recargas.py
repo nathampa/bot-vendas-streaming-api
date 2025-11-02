@@ -1,6 +1,12 @@
 import uuid
 import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
+
+import mercadopago
+from app.core.config import settings
+# SDK do Mercado Pago
+sdk = mercadopago.SDK(settings.MERCADOPAGO_ACCESS_TOKEN)
+
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlmodel import Session, select
 from typing import List
 from app.models.base import TipoStatusPagamento
@@ -50,123 +56,147 @@ def create_pedido_de_recarga(
         nome_completo=recarga_in.nome_completo
     )
     
-    # 3. ========== TODO: Integração Real com Gateway de Pagamento ==========
-    #    Neste ponto, faríamos uma chamada HTTP para o Mercado Pago, Asaas, etc.
-    #    ex: gateway_response = mercadopago.create_payment(recarga_in.valor, usuario.id)
-    #    Mas, por enquanto, vamos "mockar" (simular) a resposta.
-    # ======================================================================
-    
-    # 4. Simulação (Mock) da resposta do Gateway
-    gateway_id_mock = f"MOCK_PIX_{uuid.uuid4()}"
-    pix_copia_e_cola_mock = "00020126330014br.gov.bcb.pix0111+55119... (PIX MOCKADO)"
-    # Um QR Code de 1x1 pixel, apenas para teste
-    pix_qr_code_base64_mock = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    # Define os dados do pagamento
+    payment_data = {
+        "transaction_amount": float(recarga_in.valor),
+        "description": f"Recarga de saldo Ferreira Streamings (ID: {usuario.id})",
+        "payment_method_id": "pix",
+        "payer": {
+            "email": f"user_{usuario.telegram_id}@ferreirastreamings.com", # Email fictício, mas obrigatório
+            "first_name": usuario.nome_completo,
+        },
+        #"notification_url": "https://127.0.0.1:8000/api/v1/webhook/recarga",
+    }
 
-    # 5. Salva a transação PENDENTE no nosso banco
+    try:
+        # 4. Faz a chamada real à API do Mercado Pago
+        print("API: A contactar Mercado Pago para criar PIX...")
+        payment_response = sdk.payment().create(payment_data)
+
+        if payment_response["status"] != 201:
+            # Se o MP falhar
+            print(f"Erro do Mercado Pago: {payment_response}")
+            raise HTTPException(status_code=500, detail="Erro ao gerar PIX no gateway.")
+
+        payment_info = payment_response["response"]
+
+        # 5. Extrai os dados do PIX (Copia e Cola / QR Code)
+        gateway_id_real = str(payment_info["id"]) # ID do Pagamento (ex: 12345678)
+        pix_copia_e_cola_real = payment_info["point_of_interaction"]["transaction_data"]["qr_code"]
+        pix_qr_code_base64_real = payment_info["point_of_interaction"]["transaction_data"]["qr_code_base64"]
+
+        print(f"API: PIX criado no MP com ID: {gateway_id_real}")
+
+    except Exception as e:
+        print(f"ERRO CRÍTICO na API do Mercado Pago: {e}")
+        raise HTTPException(status_code=503, detail=f"Serviço de pagamento indisponível: {e}")
+
+    # 4. Salva a transação PENDENTE no nosso banco
     nova_recarga = RecargaSaldo(
         usuario_id=usuario.id,
         valor_solicitado=recarga_in.valor,
         status_pagamento=TipoStatusPagamento.PENDENTE,
-        gateway="MOCK_GATEWAY", # Para sabermos que é um teste
-        gateway_id=gateway_id_mock,
-        pix_copia_e_cola=pix_copia_e_cola_mock
+        gateway="MERCADOPAGO", # Agora é real
+        gateway_id=gateway_id_real, # O ID real do MP
+        pix_copia_e_cola=pix_copia_e_cola_real
     )
-    
+
     session.add(nova_recarga)
     session.commit()
     session.refresh(nova_recarga)
     
-    # 6. Retorna os dados do PIX para o bot
+    # 5. Retorna os dados do PIX para o bot
     return RecargaCreateResponse(
         recarga_id=nova_recarga.id,
         status_pagamento=nova_recarga.status_pagamento,
         valor_solicitado=nova_recarga.valor_solicitado,
-        pix_copia_e_cola=pix_copia_e_cola_mock,
-        pix_qr_code_base64=pix_qr_code_base64_mock
+        pix_copia_e_cola=pix_copia_e_cola_real,
+        pix_qr_code_base64=f"data:image/png;base64,{pix_qr_code_base64_real}"
     )
 
 # --- 4. ENDPOINT NOVO (WEBHOOK DE CONFIRMAÇÃO) ---
 
 @webhook_router.post(
     "/recarga", 
-    response_model=WebhookRecargaResponse
+    # response_model=WebhookRecargaResponse (removido para simplicidade)
 )
-def webhook_confirmacao_recarga(
+async def webhook_confirmacao_recarga_mp(
     *,
-    session: Session = Depends(get_session),
-    webhook_in: WebhookRecargaRequest
+    request: Request, # Recebemos o Request "cru" para ler o JSON
+    session: Session = Depends(get_session)
 ):
     """
-    [WEBHOOK] Endpoint para o gateway de pagamento (simulado)
-    confirmar que um PIX foi pago.
-    
-    Isto irá mudar o status da recarga para 'PAGO' e
-    adicionar o saldo à carteira do usuário.
+    [WEBHOOK] Endpoint para o MERCADO PAGO confirmar um PIX.
     """
     
-    # TODO: Na vida real, validar a assinatura do webhook aqui.
-    
-    print(f"Webhook recebido para o gateway_id: {webhook_in.gateway_id}")
-    
-    # 1. Encontra a recarga pendente (usando o gateway_id)
-    recarga = session.exec(
-        select(RecargaSaldo).where(
-            RecargaSaldo.gateway_id == webhook_in.gateway_id
-        )
-    ).first()
-    
-    if not recarga:
-        print("ERRO: Webhook para gateway_id não encontrado.")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Recarga não encontrada para este ID de gateway."
-        )
-    
-    # 2. Verifica se já foi paga (Idempotência)
-    if recarga.status_pagamento == TipoStatusPagamento.PAGO:
-        print("Aviso: Webhook recebido para recarga que já estava paga.")
-        usuario = session.get(Usuario, recarga.usuario_id)
-        return WebhookRecargaResponse(
-            status="JA_PAGO",
-            recarga_id=recarga.id,
-            novo_saldo_usuario=usuario.saldo_carteira
-        )
+    # 1. Lê o JSON enviado pelo Mercado Pago
+    data = await request.json()
+    print(f"Webhook do Mercado Pago recebido: {data}")
 
-    # 3. Transação Principal: Atualiza a recarga e o saldo do usuário
+    # 2. Valida se é uma notificação de pagamento
+    if data.get("type") != "payment" or data.get("action") != "payment.updated":
+        print("Webhook ignorado (não é uma atualização de pagamento)")
+        return {"status": "ignorado"}
+        
     try:
-        # a. Atualiza a recarga para PAGO
-        recarga.status_pagamento = TipoStatusPagamento.PAGO
-        recarga.pago_em = datetime.datetime.utcnow()
-        session.add(recarga)
+        # 3. Extrai o ID do pagamento (no formato do MP)
+        gateway_id_real = str(data["data"]["id"])
         
-        # b. Encontra o usuário
-        usuario = session.get(Usuario, recarga.usuario_id)
-        if not usuario:
-            raise HTTPException(status_code=500, detail="Usuário da recarga não encontrado.")
+        print(f"A processar atualização para o payment_id: {gateway_id_real}")
+
+        # 4. Busca os detalhes do pagamento na API do MP (Validação)
+        payment_info = sdk.payment().get(gateway_id_real)
+        if payment_info["status"] != 200:
+            print(f"Erro: Não foi possível buscar dados do payment_id {gateway_id_real} no MP")
+            raise HTTPException(status_code=404, detail="Pagamento não encontrado no gateway.")
+
+        payment_status = payment_info["response"]["status"]
         
-        # c. Credita o saldo na carteira
-        usuario.saldo_carteira = usuario.saldo_carteira + recarga.valor_solicitado
-        session.add(usuario)
+        # 5. Se o pagamento foi APROVADO ("approved")
+        if payment_status == "approved":
+            
+            # Encontra a nossa recarga interna
+            recarga = session.exec(
+                select(RecargaSaldo).where(
+                    RecargaSaldo.gateway_id == gateway_id_real
+                )
+            ).first()
+            
+            if not recarga:
+                print(f"Erro: Pagamento {gateway_id_real} aprovado, mas não encontrado no nosso banco.")
+                return {"status": "recarga_nao_encontrada"}
+            
+            # 6. Verifica se já foi pago (Idempotência)
+            if recarga.status_pagamento == TipoStatusPagamento.PAGO:
+                print(f"Aviso: Recarga {recarga.id} já estava paga.")
+                return {"status": "ja_pago"}
+
+            # 7. Transação Principal: Creditar o saldo
+            recarga.status_pagamento = TipoStatusPagamento.PAGO
+            recarga.pago_em = datetime.datetime.utcnow()
+            session.add(recarga)
+            
+            usuario = session.get(Usuario, recarga.usuario_id)
+            if usuario:
+                usuario.saldo_carteira += recarga.valor_solicitado
+                session.add(usuario)
+                session.commit()
+                print(f"SUCESSO: Saldo de {recarga.valor_solicitado} creditado ao usuário {usuario.id}")
+                
+                # TODO: Enviar notificação ao bot/usuário
+                
+                return {"status": "pagamento_creditado_sucesso"}
+            else:
+                print(f"ERRO CRÍTICO: Usuário {recarga.usuario_id} não encontrado para creditar o saldo.")
+                session.rollback()
+                return {"status": "usuario_nao_encontrado"}
         
-        # d. Commita a transação
-        session.commit()
-        session.refresh(recarga)
-        session.refresh(usuario)
-        
-        print(f"Sucesso: Saldo de {recarga.valor_solicitado} adicionado ao usuário {usuario.id}")
-        
-        # TODO: Enviar notificação para o bot/usuário informando do saldo.
-        
-        return WebhookRecargaResponse(
-            status="PAGO_COM_SUCESSO",
-            recarga_id=recarga.id,
-            novo_saldo_usuario=usuario.saldo_carteira
-        )
-        
+        else:
+            # Se o status for "pending", "failed", etc.
+            print(f"Pagamento {gateway_id_real} não está 'approved'. Status: {payment_status}")
+            return {"status": f"pagamento_{payment_status}"}
+
     except Exception as e:
-        print(f"ERRO CRÍTICO na transação do webhook: {e}")
+        print(f"ERRO CRÍTICO no processamento do webhook: {e}")
         session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erro interno ao processar pagamento: {e}"
-        )
+        return {"status": "erro_interno"}

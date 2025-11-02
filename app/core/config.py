@@ -18,8 +18,12 @@ class Settings(BaseSettings):
 
     BOT_API_KEY: str
 
+    MERCADOPAGO_ACCESS_TOKEN: str
+
     # Configuração para dizer ao Pydantic para ler do arquivo .env
     model_config = SettingsConfigDict(env_file=".env")
+
+    
 
 
 # Criamos uma instância única que será importada em todo o projeto
