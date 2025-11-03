@@ -106,6 +106,46 @@ def get_lista_gift_cards(
         
     return lista_resposta
 
+@admin_router.delete("/{gift_card_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_gift_card(
+    *,
+    session: Session = Depends(get_session),
+    gift_card_id: uuid.UUID
+):
+    """
+    [ADMIN] Deleta um Gift Card específico pelo seu ID.
+    
+    Nota: Esta é uma operação destrutiva. O card será removido
+    permanentemente, independentemente de ter sido usado ou não.
+    """
+    
+    # 1. Encontra o Gift Card pelo ID (chave primária)
+    # session.get() é a forma mais eficiente de buscar por PK
+    db_gift_card = session.get(GiftCard, gift_card_id)
+    
+    # 2. Verifica se ele existe
+    if not db_gift_card:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Gift Card não encontrado."
+        )
+        
+    # 3. Se existe, deleta
+    try:
+        session.delete(db_gift_card)
+        session.commit()
+    except Exception as e:
+        # Em caso de erro de banco de dados (ex: restrições de FK)
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao deletar o Gift Card: {e}"
+        )
+
+    # 4. Retorna 204 No Content (definido no decorator)
+    # Nenhum conteúdo é retornado no sucesso
+    return
+
 # --- ENDPOINT DO BOT ---
 
 @router.post("/resgatar", response_model=GiftCardResgatarResponse)
@@ -181,3 +221,4 @@ def resgatar_gift_card(
         session.rollback()
         print(f"ERRO CRÍTICO no resgate de Gift Card: {e}")
         raise HTTPException(status_code=500, detail="Erro interno ao processar o resgate.")
+    
