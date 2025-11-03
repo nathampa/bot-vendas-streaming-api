@@ -128,3 +128,42 @@ def update_conta_estoque(
     session.commit()
     session.refresh(conta)
     return conta
+
+@router.delete("/{estoque_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_conta_estoque(
+    *,
+    session: Session = Depends(get_session),
+    estoque_id: uuid.UUID
+):
+    """
+    [ADMIN] Deleta permanentemente uma conta do estoque.
+    
+    Esta ação não pode ser desfeita.
+    """
+    
+    # 1. Encontra a conta pelo seu ID (Chave Primária)
+    # session.get() é a forma mais eficiente de buscar por PK
+    conta = session.get(EstoqueConta, estoque_id)
+    
+    # 2. Verifica se a conta foi encontrada
+    if not conta:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conta de estoque não encontrada"
+        )
+        
+    # 3. Se encontrada, deleta a conta
+    try:
+        session.delete(conta)
+        session.commit()
+    except Exception as e:
+        # Caso ocorra um erro de banco (ex: restrição de chave estrangeira)
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro de banco de dados ao deletar a conta: {e}"
+        )
+
+    # 4. Retorna 204 No Content (sucesso, sem corpo de resposta)
+    # Isso é feito automaticamente pelo decorator
+    return
