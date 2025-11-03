@@ -18,6 +18,7 @@ class Produto(SQLModel, table=True):
     descricao: Optional[str] = Field(default=None)
     preco: Decimal = Field(max_digits=10, decimal_places=2, nullable=False)
     is_ativo: bool = Field(default=True, nullable=False)
+    requer_email_cliente: bool = Field(default=False, nullable=False)
     criado_em: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)
     atualizado_em: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False, sa_column_kwargs={"onupdate": datetime.datetime.utcnow})
     
