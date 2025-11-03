@@ -23,10 +23,11 @@ class PedidoAdminList(SQLModel):
     produto_nome: str
     usuario_nome_completo: str
     usuario_telegram_id: int
+    email_cliente: Optional[str] = None
 
 # -----------------------------------------------------------------
 # Schema para os DETALHES de um pedido (o que aparece no modal)
 # -----------------------------------------------------------------
 class PedidoAdminDetails(PedidoAdminList):
     # Herda tudo da lista e adiciona a conta
-    conta: PedidoAdminConta
+    conta: Optional[PedidoAdminConta] = None

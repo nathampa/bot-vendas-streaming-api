@@ -15,6 +15,7 @@ class ProdutoRead(SQLModel):
     nome: str
     descricao: Optional[str]
     preco: Decimal
+    requer_email_cliente: bool
 
 # -----------------------------------------------------------------
 # Schema para CRIAÇÃO (o que o Admin usa no painel)
@@ -24,6 +25,7 @@ class ProdutoCreate(SQLModel):
     descricao: Optional[str]
     preco: Decimal
     is_ativo: bool = True
+    requer_email_cliente: bool = False
 
 # -----------------------------------------------------------------
 # Schema para ATUALIZAÇÃO (o que o Admin usa no painel)
@@ -33,6 +35,7 @@ class ProdutoUpdate(SQLModel):
     descricao: Optional[str] = None
     preco: Optional[Decimal] = None
     is_ativo: Optional[bool] = None
+    requer_email_cliente: Optional[bool] = None
 
 class ProdutoAdminRead(ProdutoRead):
     is_ativo: bool

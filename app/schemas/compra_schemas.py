@@ -9,6 +9,7 @@ from sqlmodel import SQLModel
 class CompraCreateRequest(SQLModel):
     telegram_id: int      # Quem está a comprar
     produto_id: uuid.UUID   # O que está a comprar
+    email_cliente: Optional[str] = None
 
 # -----------------------------------------------------------------
 # Schema de RESPONSE (O que a API retorna para o bot)
@@ -22,5 +23,7 @@ class CompraCreateResponse(SQLModel):
     
     # O "Produto"
     produto_nome: str
-    login: str
-    senha: str  # A senha descriptografada!
+    login: Optional[str] = None
+    senha: Optional[str] = None
+    requer_email_cliente: bool
+    mensagem_entrega: str

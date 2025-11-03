@@ -31,6 +31,7 @@ def get_admin_pedidos(
             Pedido.id,
             Pedido.criado_em,
             Pedido.valor_pago,
+            Pedido.email_cliente,
             Produto.nome.label("produto_nome"),
             Usuario.nome_completo.label("usuario_nome_completo"),
             Usuario.telegram_id.label("usuario_telegram_id")
@@ -68,7 +69,7 @@ def get_pedido_detalhes(
         )
         .join(Produto, Pedido.produto_id == Produto.id)
         .join(Usuario, Pedido.usuario_id == Usuario.id)
-        .join(EstoqueConta, Pedido.estoque_conta_id == EstoqueConta.id)
+        .join(EstoqueConta, Pedido.estoque_conta_id == EstoqueConta.id, isouter=True)
         .where(Pedido.id == pedido_id)
     )
     
@@ -78,31 +79,34 @@ def get_pedido_detalhes(
         raise HTTPException(status_code=404, detail="Pedido não encontrado")
 
     # 2. Desempacota os resultados
-    pedido, produto_nome, usuario_nome, usuario_tid, conta_login, conta_senha_cripto = resultado
+    (
+        pedido, produto_nome, usuario_nome, 
+        usuario_tid, conta_login, conta_senha_cripto
+    ) = resultado
     
-    # 3. Descriptografa a senha
-    senha_descriptografada = security.decrypt_data(conta_senha_cripto)
-    if not senha_descriptografada:
-        # Se a chave mudou ou os dados estão corrompidos
-        senha_descriptografada = "[ERRO AO DESCRIPTOGRAFAR]"
-
-    # 4. Monta o schema de resposta manualmente
     
-    # Sub-schema da conta
-    conta_info = PedidoAdminConta(
-        login=conta_login,
-        senha=senha_descriptografada
-    )
+    # 3. Monta a conta (se ela existir)
+    conta_info = None
+    if conta_login and conta_senha_cripto:
+        senha_descriptografada = security.decrypt_data(conta_senha_cripto)
+        if not senha_descriptografada:
+            senha_descriptografada = "[ERRO AO DESCRIPTOGRAFAR]"
+        
+        conta_info = PedidoAdminConta(
+            login=conta_login,
+            senha=senha_descriptografada
+        )
     
-    # Schema principal
+    # 4. Monta o schema de resposta
     detalhes_pedido = PedidoAdminDetails(
         id=pedido.id,
         criado_em=pedido.criado_em,
         valor_pago=pedido.valor_pago,
+        email_cliente=pedido.email_cliente, # <-- ADICIONADO
         produto_nome=produto_nome,
         usuario_nome_completo=usuario_nome,
         usuario_telegram_id=usuario_tid,
-        conta=conta_info # Aninha os detalhes da conta
+        conta=conta_info # Aninha os detalhes da conta (pode ser None)
     )
     
     return detalhes_pedido

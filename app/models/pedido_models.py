@@ -16,16 +16,19 @@ class Pedido(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     valor_pago: Decimal = Field(max_digits=10, decimal_places=2, nullable=False)
     criado_em: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)
+    email_cliente: Optional[str] = Field(default=None, nullable=True, index=True)
 
     # --- Chaves Estrangeiras ---
     usuario_id: uuid.UUID = Field(foreign_key="usuario.id", nullable=False)
     produto_id: uuid.UUID = Field(foreign_key="produto.id", nullable=False)
-    estoque_conta_id: uuid.UUID = Field(foreign_key="estoqueconta.id", nullable=False)
+    estoque_conta_id: Optional[uuid.UUID] = Field(
+        default=None, foreign_key="estoqueconta.id", nullable=True
+    )
 
     # --- Relacionamentos (Lado "Muitos") ---
     usuario: "Usuario" = Relationship(back_populates="pedidos")
     produto: "Produto" = Relationship(back_populates="pedidos")
-    estoque_conta: "EstoqueConta" = Relationship(back_populates="pedidos")
+    estoque_conta: Optional["EstoqueConta"] = Relationship(back_populates="pedidos")
 
     # --- Relacionamento 1-para-1 ---
     # Um pedido pode ter, no máximo, UM ticket de suporte.
