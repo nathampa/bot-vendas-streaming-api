@@ -1,3 +1,4 @@
+import uuid
 import datetime
 from decimal import Decimal
 from fastapi import APIRouter, Depends
@@ -14,7 +15,8 @@ from app.models.base import TipoStatusTicket
 from app.schemas.dashboard_schemas import (
     DashboardKPIs,
     DashboardTopProduto,
-    DashboardEstoqueBaixo
+    DashboardEstoqueBaixo,
+    DashboardRecentPedido
 )
 from app.api.v1.deps import get_current_admin_user # O "Cadeado" do Admin
 
@@ -120,6 +122,32 @@ def get_estoque_baixo(
         .group_by(Produto.nome)
         .having(func.count(EstoqueConta.id) < limite) # Filtra produtos abaixo do limite
         .order_by(func.count(EstoqueConta.id).asc()) # Mostra os mais críticos primeiro
+    )
+    
+    resultados = session.exec(stmt).all()
+    return resultados
+
+@router.get("/recentes-pedidos", response_model=List[DashboardRecentPedido])
+def get_recentes_pedidos(
+    *,
+    session: Session = Depends(get_session)
+):
+    """
+    [ADMIN] Retorna os 5 últimos pedidos realizados.
+    """
+    stmt = (
+        select(
+            Pedido.id,
+            Produto.nome.label("produto_nome"),
+            Pedido.valor_pago,
+            Pedido.criado_em,
+            Usuario.telegram_id.label("usuario_telegram_id"),
+            Usuario.nome_completo.label("nome_completo")
+        )
+        .join(Produto, Pedido.produto_id == Produto.id)
+        .join(Usuario, Pedido.usuario_id == Usuario.id)
+        .order_by(Pedido.criado_em.desc())
+        .limit(5)
     )
     
     resultados = session.exec(stmt).all()

@@ -1,3 +1,5 @@
+import uuid
+import datetime
 from decimal import Decimal
 from sqlmodel import SQLModel
 
@@ -24,3 +26,12 @@ class DashboardTopProduto(SQLModel):
 class DashboardEstoqueBaixo(SQLModel):
     produto_nome: str
     contas_disponiveis: int # Contas com pelo menos 1 slot livre
+
+
+class DashboardRecentPedido(SQLModel):
+    id: uuid.UUID
+    produto_nome: str
+    valor_pago: Decimal
+    criado_em: datetime.datetime
+    usuario_telegram_id: int
+    nome_completo: str
