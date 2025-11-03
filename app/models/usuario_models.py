@@ -3,6 +3,7 @@ import datetime
 from decimal import Decimal
 from typing import Optional, List, TYPE_CHECKING
 from sqlmodel import Field, SQLModel, Relationship
+import sqlalchemy as sa
 
 from app.models.base import TipoStatusPagamento
 
@@ -14,7 +15,7 @@ if TYPE_CHECKING:
 # --- Tabela: usuarios ---
 class Usuario(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    telegram_id: int = Field(unique=True, index=True, nullable=False)
+    telegram_id: int = Field(sa_column=sa.Column(sa.BigInteger(), unique=True, index=True, nullable=False))
     nome_completo: str = Field(nullable=False)
     saldo_carteira: Decimal = Field(default=0.0, max_digits=10, decimal_places=2, nullable=False)
     is_admin: bool = Field(default=False, nullable=False)

@@ -11,6 +11,7 @@ from app.models.usuario_models import Usuario
 from app.models.pedido_models import Pedido
 from app.models.produto_models import Produto, EstoqueConta
 from app.models.suporte_models import TicketSuporte
+from app.services.notification_service import send_telegram_message, escape_markdown_v2
 
 # --- Funções Auxiliares (Exatamente como eram antes) ---
 
@@ -34,7 +35,25 @@ def handle_reembolso_carteira(session: Session, ticket: TicketSuporte):
     session.add(usuario)
     session.add(ticket)
 
-    # TODO: Enviar notificação ao usuário sobre o reembolso
+    try:
+        # Buscamos o nome do produto para a mensagem
+        produto_nome_real = session.get(Produto, pedido.produto_id).nome
+        
+        # Escapamos os valores para o MarkdownV2
+        valor_formatado = escape_markdown_v2(f"{pedido.valor_pago:.2f}")
+        produto_nome = escape_markdown_v2(produto_nome_real)
+
+        message = (
+            f"✅ *Reembolso Aprovado*\n\n"
+            f"O seu ticket para o produto *{produto_nome}* foi resolvido\\.\n\n"
+            f"Valor reembolsado: *R$ {valor_formatado}*\n"
+            f"O valor já está na sua carteira do bot\\."
+        )
+        send_telegram_message(telegram_id=usuario.telegram_id, message_text=message)
+    except Exception as e_notify:
+        # Loga o erro, mas não falha a transação principal
+        print(f"ERRO: Falha ao enviar notificação de reembolso para {usuario.telegram_id}: {e_notify}")
+
     print(f"Sucesso: Reembolsado {pedido.valor_pago} para usuário {usuario.id}")
 
 def handle_trocar_conta(session: Session, ticket: TicketSuporte):
@@ -84,7 +103,28 @@ def handle_trocar_conta(session: Session, ticket: TicketSuporte):
 
     senha = security.decrypt_data(nova_conta.senha)
 
-    # TODO: Enviar notificação ao usuário com as novas credenciais
+    try:
+        # Obter o telegram_id do usuário dono do ticket
+        usuario_tid = session.get(Usuario, ticket.usuario_id).telegram_id
+        
+        # Escapamos os valores para o MarkdownV2
+        produto_nome = escape_markdown_v2(produto.nome)
+        login_novo = escape_markdown_v2(nova_conta.login)
+        # A senha pode falhar ao descriptografar
+        senha_nova = escape_markdown_v2(senha) if senha else "ERRO\\_NA\\_SENHA"
+
+        message = (
+            f"✅ *Ticket Resolvido \\- Conta Trocada*\n\n"
+            f"O seu ticket para *{produto_nome}* foi resolvido\\.\n\n"
+            f"Aqui estão as suas *novas* credenciais de acesso:\n"
+            f"Login: `{login_novo}`\n"
+            f"Senha: `{senha_nova}`\n\n"
+            f"⚠️ *Por favor, não altere a senha\\!*"
+        )
+        send_telegram_message(telegram_id=usuario_tid, message_text=message)
+    except Exception as e_notify:
+        # Loga o erro, mas não falha a transação principal
+        print(f"ERRO: Falha ao enviar notificação de troca de conta para {usuario_tid}: {e_notify}")
     print(f"Sucesso: Ticket {ticket.id} resolvido com Hot-Swap. Nova conta: {nova_conta.login} / {senha}")
 
 def handle_fechar_manualmente(session: Session, ticket: TicketSuporte):

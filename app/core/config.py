@@ -20,6 +20,8 @@ class Settings(BaseSettings):
 
     MERCADOPAGO_ACCESS_TOKEN: str
 
+    TELEGRAM_BOT_TOKEN: str
+
     # Configuração para dizer ao Pydantic para ler do arquivo .env
     model_config = SettingsConfigDict(env_file=".env")
 
