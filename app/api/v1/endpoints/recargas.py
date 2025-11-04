@@ -12,7 +12,7 @@ from typing import List
 from app.models.base import TipoStatusPagamento
 from .usuarios import get_or_create_usuario
 
-from app.db.database import get_session
+from app.db.database import get_session, engine
 from app.models.usuario_models import Usuario, RecargaSaldo
 from app.schemas.recarga_schemas import (
     RecargaCreateRequest, 
@@ -21,6 +21,8 @@ from app.schemas.recarga_schemas import (
     WebhookRecargaResponse
 )
 from app.models.base import TipoStatusPagamento # Importa nosso ENUM
+from app.services.notification_service import send_telegram_message, escape_markdown_v2
+from decimal import Decimal
 
 # Roteador para Recargas
 router = APIRouter()
@@ -65,7 +67,7 @@ def create_pedido_de_recarga(
             "email": f"user_{usuario.telegram_id}@ferreirastreamings.com", # Email fictício, mas obrigatório
             "first_name": usuario.nome_completo,
         },
-        #"notification_url": "https://127.0.0.1:8000/api/v1/webhook/recarga",
+        "notification_url": "https://araceli-unrapturous-nightly.ngrok-free.dev/api/v1/webhook/recarga",
     }
 
     try:
@@ -118,33 +120,30 @@ def create_pedido_de_recarga(
 
 @webhook_router.post(
     "/recarga", 
-    # response_model=WebhookRecargaResponse (removido para simplicidade)
 )
 async def webhook_confirmacao_recarga_mp(
     *,
-    request: Request, # Recebemos o Request "cru" para ler o JSON
+    request: Request,
     session: Session = Depends(get_session)
 ):
     """
     [WEBHOOK] Endpoint para o MERCADO PAGO confirmar um PIX.
     """
     
-    # 1. Lê o JSON enviado pelo Mercado Pago
     data = await request.json()
     print(f"Webhook do Mercado Pago recebido: {data}")
 
-    # 2. Valida se é uma notificação de pagamento
     if data.get("type") != "payment" or data.get("action") != "payment.updated":
         print("Webhook ignorado (não é uma atualização de pagamento)")
         return {"status": "ignorado"}
         
+    telegram_id_para_notificar = None
+    mensagem_para_notificar = ""
+
     try:
-        # 3. Extrai o ID do pagamento (no formato do MP)
         gateway_id_real = str(data["data"]["id"])
-        
         print(f"A processar atualização para o payment_id: {gateway_id_real}")
 
-        # 4. Busca os detalhes do pagamento na API do MP (Validação)
         payment_info = sdk.payment().get(gateway_id_real)
         if payment_info["status"] != 200:
             print(f"Erro: Não foi possível buscar dados do payment_id {gateway_id_real} no MP")
@@ -152,51 +151,81 @@ async def webhook_confirmacao_recarga_mp(
 
         payment_status = payment_info["response"]["status"]
         
-        # 5. Se o pagamento foi APROVADO ("approved")
         if payment_status == "approved":
             
-            # Encontra a nossa recarga interna
-            recarga = session.exec(
-                select(RecargaSaldo).where(
-                    RecargaSaldo.gateway_id == gateway_id_real
-                )
-            ).first()
+            # --- TRANSAÇÃO DO BANCO ---
+            # Envolvemos a lógica de banco em um 'with' separado
+            # para garantir que ela seja concluída (commit) antes da notificação.
             
-            if not recarga:
-                print(f"Erro: Pagamento {gateway_id_real} aprovado, mas não encontrado no nosso banco.")
-                return {"status": "recarga_nao_encontrada"}
-            
-            # 6. Verifica se já foi pago (Idempotência)
-            if recarga.status_pagamento == TipoStatusPagamento.PAGO:
-                print(f"Aviso: Recarga {recarga.id} já estava paga.")
-                return {"status": "ja_pago"}
+            with Session(engine) as session_tx:
+                recarga = session_tx.exec(
+                    select(RecargaSaldo).where(
+                        RecargaSaldo.gateway_id == gateway_id_real
+                    )
+                ).first()
+                
+                if not recarga:
+                    print(f"Erro: Pagamento {gateway_id_real} aprovado, mas não encontrado no nosso banco.")
+                    return {"status": "recarga_nao_encontrada"}
+                
+                if recarga.status_pagamento == TipoStatusPagamento.PAGO:
+                    print(f"Aviso: Recarga {recarga.id} já estava paga.")
+                    return {"status": "ja_pago"}
 
-            # 7. Transação Principal: Creditar o saldo
-            recarga.status_pagamento = TipoStatusPagamento.PAGO
-            recarga.pago_em = datetime.datetime.utcnow()
-            session.add(recarga)
+                recarga.status_pagamento = TipoStatusPagamento.PAGO
+                recarga.pago_em = datetime.datetime.utcnow()
+                session_tx.add(recarga)
+                
+                usuario = session_tx.get(Usuario, recarga.usuario_id)
+                if not usuario:
+                    print(f"ERRO CRÍTICO: Usuário {recarga.usuario_id} não encontrado para creditar o saldo.")
+                    session_tx.rollback()
+                    return {"status": "usuario_nao_encontrado"}
+
+                valor_creditado = recarga.valor_solicitado
+                novo_saldo = usuario.saldo_carteira + recarga.valor_solicitado
+                
+                usuario.saldo_carteira = novo_saldo
+                session_tx.add(usuario)
+                
+                # --- Prepara os dados para a notificação ---
+                # Nós preparamos as variáveis ANTES do commit
+                telegram_id_para_notificar = usuario.telegram_id
+                valor_f = escape_markdown_v2(f"{valor_creditado:.2f}")
+                saldo_f = escape_markdown_v2(f"{novo_saldo:.2f}")
+                
+                mensagem_para_notificar = (
+                    f"✅ *Pagamento Aprovado*\n\n"
+                    f"O seu PIX no valor de *R$ {valor_f}* foi confirmado\\!\n\n"
+                    f"O seu novo saldo é: *R$ {saldo_f}*"
+                )
+                
+                # --- Commit da transação ---
+                session_tx.commit()
+                print(f"SUCESSO: Saldo de {valor_creditado} creditado ao usuário {usuario.id}")
             
-            usuario = session.get(Usuario, recarga.usuario_id)
-            if usuario:
-                usuario.saldo_carteira += recarga.valor_solicitado
-                session.add(usuario)
-                session.commit()
-                print(f"SUCESSO: Saldo de {recarga.valor_solicitado} creditado ao usuário {usuario.id}")
-                
-                # TODO: Enviar notificação ao bot/usuário
-                
-                return {"status": "pagamento_creditado_sucesso"}
-            else:
-                print(f"ERRO CRÍTICO: Usuário {recarga.usuario_id} não encontrado para creditar o saldo.")
-                session.rollback()
-                return {"status": "usuario_nao_encontrado"}
+            # --- FIM DA TRANSAÇÃO DO BANCO ---
+
+            # --- ENVIO DA NOTIFICAÇÃO ---
+            # Esta parte agora está FORA do 'try/except' principal.
+            # Se a notificação falhar, ela não causará um ROLLBACK.
+            if telegram_id_para_notificar and mensagem_para_notificar:
+                try:
+                    send_telegram_message(
+                        telegram_id=telegram_id_para_notificar,
+                        message_text=mensagem_para_notificar
+                    )
+                except Exception as e_notify:
+                    print(f"ERRO (NÃO-CRÍTICO): Falha ao enviar notificação de recarga para {telegram_id_para_notificar}: {e_notify}")
+            
+            return {"status": "pagamento_creditado_sucesso"}
         
         else:
-            # Se o status for "pending", "failed", etc.
             print(f"Pagamento {gateway_id_real} não está 'approved'. Status: {payment_status}")
             return {"status": f"pagamento_{payment_status}"}
 
     except Exception as e:
+        # Este 'except' agora só pega erros ANTES do commit
         print(f"ERRO CRÍTICO no processamento do webhook: {e}")
-        session.rollback()
+        # session.rollback() # O 'with Session' já faz o rollback automático
         return {"status": "erro_interno"}
