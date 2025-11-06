@@ -134,8 +134,6 @@ def get_all_user_ids(
         .where(Usuario.is_admin == False)
     )
     
-    # .all() retorna uma lista de "Rows", 
-    # precisamos extrair o primeiro item (o ID) de cada linha
-    user_ids = [row[0] for row in session.exec(stmt).all()]
+    user_ids = session.exec(stmt).all()
     
     return user_ids
