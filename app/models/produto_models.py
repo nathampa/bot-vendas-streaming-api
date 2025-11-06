@@ -3,6 +3,7 @@ import datetime
 from decimal import Decimal
 from typing import Optional, List
 from sqlmodel import Field, SQLModel, Relationship
+import sqlalchemy as sa
 
 # Importando 'Pedido' e 'TicketSuporte' como strings
 # para evitar erros de "Importação Circular"
@@ -16,6 +17,7 @@ class Produto(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     nome: str = Field(unique=True, index=True, nullable=False)
     descricao: Optional[str] = Field(default=None)
+    instrucoes_pos_compra: Optional[str] = Field(default=None, sa_column=sa.Column(sa.Text))
     preco: Decimal = Field(max_digits=10, decimal_places=2, nullable=False)
     is_ativo: bool = Field(default=True, nullable=False)
     requer_email_cliente: bool = Field(default=False, nullable=False)
