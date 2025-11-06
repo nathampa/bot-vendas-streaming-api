@@ -26,9 +26,15 @@ router = APIRouter()
 )
 def get_produtos_ativos(session: Session = Depends(get_session)):
     """
-    Endpoint para o bot listar todos os produtos ATIVOS.
+    Endpoint para o bot listar todos os produtos ATIVOS em ordem alfabética.
     """
-    produtos = session.exec(select(Produto).where(Produto.is_ativo == True)).all()
+    statement = (
+        select(Produto)
+        .where(Produto.is_ativo == True)
+        .order_by(Produto.nome)
+    )
+    produtos = session.exec(statement).all()
+
     return produtos
 
 # ===============================================================
