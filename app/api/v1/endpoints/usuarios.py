@@ -111,3 +111,31 @@ def get_meus_pedidos(
     ]
 
     return lista_pedidos
+
+# Endpoint buscar id de todo os usuarios
+@router.get(
+    "/all-ids",
+    response_model=List[int],
+    include_in_schema=False # Esconde esta rota do /docs público
+)
+def get_all_user_ids(
+    *,
+    session: Session = Depends(get_session)
+):
+    """
+    [BOT-ADMIN] Retorna uma lista de todos os Telegram IDs
+    dos usuários que NÃO são administradores.
+    Usado para o broadcast de mensagens.
+    """
+    
+    # Seleciona apenas os telegram_id de usuários normais
+    stmt = (
+        select(Usuario.telegram_id)
+        .where(Usuario.is_admin == False)
+    )
+    
+    # .all() retorna uma lista de "Rows", 
+    # precisamos extrair o primeiro item (o ID) de cada linha
+    user_ids = [row[0] for row in session.exec(stmt).all()]
+    
+    return user_ids
