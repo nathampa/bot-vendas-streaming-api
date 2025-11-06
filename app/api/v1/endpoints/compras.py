@@ -93,7 +93,7 @@ def create_compra_com_saldo(
             if not senha_descriptografada:
                 raise HTTPException(status_code=500, detail="Erro interno ao obter credenciais.")
             senha_entrega = senha_descriptografada
-            mensagem_entrega = "Aqui estão suas credenciais:"
+            mensagem_entrega = produto.instrucoes_pos_compra or "Aqui estão suas credenciais:"
 
         else:
             # --- FLUXO DE ENTREGA MANUAL (Youtube, Canva) ---
@@ -101,17 +101,18 @@ def create_compra_com_saldo(
             conta_para_alocar_id = None 
             login_entrega = None
             senha_entrega = None
+            instrucao_customizada = produto.instrucoes_pos_compra or "A entrega é manual e pode levar alguns minutos."
             mensagem_entrega = (
                 f"O convite será enviado para o email:\n"
                 f"`{compra_in.email_cliente}`\n\n"
-                f"A entrega é manual e pode levar alguns minutos."
+                f"**Instruções:**\n{instrucao_customizada}"
             )
 
         # --- 5. Criar o "Recibo" (Pedido) ---
         novo_pedido = Pedido(
             usuario_id=usuario.id,
             produto_id=produto.id,
-            estoque_conta_id=conta_para_alocar_id, # <-- PODE SER NONE AGORA
+            estoque_conta_id=conta_para_alocar_id,
             valor_pago=valor_pago,
             email_cliente=compra_in.email_cliente
         )

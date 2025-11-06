@@ -23,6 +23,7 @@ class ProdutoRead(SQLModel):
 class ProdutoCreate(SQLModel):
     nome: str
     descricao: Optional[str]
+    instrucoes_pos_compra: Optional[str] = None
     preco: Decimal
     is_ativo: bool = True
     requer_email_cliente: bool = False
@@ -33,6 +34,7 @@ class ProdutoCreate(SQLModel):
 class ProdutoUpdate(SQLModel):
     nome: Optional[str] = None
     descricao: Optional[str] = None
+    instrucoes_pos_compra: Optional[str] = None
     preco: Optional[Decimal] = None
     is_ativo: Optional[bool] = None
     requer_email_cliente: Optional[bool] = None
@@ -40,3 +42,4 @@ class ProdutoUpdate(SQLModel):
 class ProdutoAdminRead(ProdutoRead):
     is_ativo: bool
     criado_em: datetime.datetime
+    instrucoes_pos_compra: Optional[str] = None
