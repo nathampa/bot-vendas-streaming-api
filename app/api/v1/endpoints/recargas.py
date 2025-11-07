@@ -57,12 +57,21 @@ def get_admin_recargas(
     resultados = session.exec(stmt).all()
     
     # Mapeia os resultados para o schema
-    lista_recargas = []
-    for recarga, tid, nome in resultados:
-        recarga_data = RecargaAdminRead.model_validate(recarga)
-        recarga_data.usuario_telegram_id = tid
-        recarga_data.usuario_nome_completo = nome
-        lista_recargas.append(recarga_data)
+    lista_recargas = [
+        RecargaAdminRead(
+            id=recarga.id,
+            valor_solicitado=recarga.valor_solicitado,
+            status_pagamento=recarga.status_pagamento,
+            gateway_id=recarga.gateway_id,
+            criado_em=recarga.criado_em,
+            pago_em=recarga.pago_em,
+            
+            # Dados do JOIN
+            usuario_telegram_id=tid,
+            usuario_nome_completo=nome
+        ) 
+        for recarga, tid, nome in resultados
+    ]
         
     return lista_recargas
 
