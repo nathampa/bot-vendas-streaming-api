@@ -1,26 +1,24 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
-
+from typing import Optional
 from app.db.database import get_session
 from app.models.usuario_models import Usuario
-from app.schemas.usuario_schemas import UsuarioRegisterRequest, UsuarioRead
+from app.schemas.usuario_schemas import (UsuarioRegisterRequest, UsuarioRead, UsuarioPedidoRead,UsuarioAdminRead, RecargaAdminRead)
 from app.api.v1.deps import get_bot_api_key
 from typing import List
 from app.models.pedido_models import Pedido
 from app.models.produto_models import Produto
-from app.schemas.usuario_schemas import UsuarioPedidoRead
 from app.api.v1.deps import get_current_admin_user
-from app.schemas.usuario_schemas import UsuarioAdminRead
-from sqlalchemy import func # Para usar o COUNT
+from sqlalchemy import func
 
 # Roteador para o Bot (protegido pela API Key)
 router = APIRouter(dependencies=[Depends(get_bot_api_key)])
 
 # --- Função Auxiliar (Colada do recargas.py) ---
-def get_or_create_usuario(session: Session, telegram_id: int, nome_completo: str) -> Usuario:
+def get_or_create_usuario(session: Session, telegram_id: int, nome_completo: str, referrer_id_telegram: Optional[int] = None) -> Usuario:
     """
     Tenta encontrar um usuário pelo telegram_id.
-    Se não encontrar, cria um novo usuário.
+    Se não encontrar, cria um novo usuário, processando o referrer_id.
     """
 
     # 1. Tenta encontrar o usuário
@@ -35,14 +33,29 @@ def get_or_create_usuario(session: Session, telegram_id: int, nome_completo: str
             session.add(usuario)
             session.commit()
             session.refresh(usuario)
-        return usuario
+        return usuario # Retorna o usuário existente
 
-    # 2. Se não encontrou, cria um novo
+    # 2. Se não encontrou (Novo Usuário), processa o indicador (referrer)
     print(f"Usuário com telegram_id {telegram_id} não encontrado. Criando novo usuário.")
+    
+    db_referrer: Optional[Usuario] = None
+    if referrer_id_telegram:
+        # Busca o usuário que indicou pelo ID do Telegram
+        stmt_referrer = select(Usuario).where(Usuario.telegram_id == referrer_id_telegram)
+        db_referrer = session.exec(stmt_referrer).first()
+        if db_referrer:
+            print(f"Usuário {telegram_id} foi indicado por {db_referrer.telegram_id} (UUID: {db_referrer.id})")
+        else:
+            print(f"Referrer com ID {referrer_id_telegram} não encontrado no banco.")
+
+    # Cria o novo usuário
     novo_usuario = Usuario(
         telegram_id=telegram_id,
-        nome_completo=nome_completo
+        nome_completo=nome_completo,
+        # Seta o ID do BD (UUID) do indicador, se ele foi encontrado
+        referrer_id=db_referrer.id if db_referrer else None
     )
+    
     session.add(novo_usuario)
     session.commit()
     session.refresh(novo_usuario)
@@ -105,7 +118,8 @@ def register_user(
     usuario = get_or_create_usuario(
         session=session,
         telegram_id=user_in.telegram_id,
-        nome_completo=user_in.nome_completo
+        nome_completo=user_in.nome_completo,
+        referrer_id_telegram=user_in.referrer_id
     )
     return usuario
 
