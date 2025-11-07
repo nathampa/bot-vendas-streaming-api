@@ -26,6 +26,12 @@ class Usuario(SQLModel, table=True):
     criado_em: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)
     atualizado_em: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False, sa_column_kwargs={"onupdate": datetime.datetime.utcnow})
 
+    # Armazena quem indicou o usuário
+    referrer_id: Optional[uuid.UUID] = Field(default=None, foreign_key="usuario.id",nullable=True)
+
+    # Prêmio cashback pendente
+    pending_cashback_percent: Optional[int] = Field(default=None, nullable=True)
+
     # --- Relacionamentos ---
     recargas: List["RecargaSaldo"] = Relationship(back_populates="usuario")
     pedidos: List["Pedido"] = Relationship(back_populates="usuario")
@@ -40,6 +46,18 @@ class Usuario(SQLModel, table=True):
     gift_cards_criados: List["GiftCard"] = Relationship(
         back_populates="criado_por_admin",
         sa_relationship_kwargs={"foreign_keys": "GiftCard.criado_por_admin_id"}
+    )
+
+    # Relação para que possamos acessar o objeto 'Usuario' de quem indicou
+    referrer: Optional["Usuario"] = Relationship(
+        back_populates="referrals",
+        sa_relationship_kwargs={"foreign_keys": "[Usuario.referrer_id]"}
+    )
+
+    # Relação para ver todos os usuários que 'este' usuário indicou
+    referrals: List["Usuario"] = Relationship(
+        back_populates="referrer",
+        sa_relationship_kwargs={"primaryjoin": "Usuario.id == Usuario.referrer_id"}
     )
 
 # --- Tabela: recargas_saldo ---
