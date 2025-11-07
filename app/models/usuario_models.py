@@ -48,16 +48,21 @@ class Usuario(SQLModel, table=True):
         sa_relationship_kwargs={"foreign_keys": "GiftCard.criado_por_admin_id"}
     )
 
-    # Relação para que possamos acessar o objeto 'Usuario' de quem indicou
+    # Relação para que possamos acessar o objeto 'Usuario' de quem indicou (Muitos-para-Um)
     referrer: Optional["Usuario"] = Relationship(
         back_populates="referrals",
-        sa_relationship_kwargs={"foreign_keys": "[Usuario.referrer_id]"}
+        sa_relationship_kwargs={
+            "foreign_keys": "[Usuario.referrer_id]",
+            "remote_side": "[Usuario.id]"  # <-- ESTA É A CORREÇÃO
+        }
     )
 
-    # Relação para ver todos os usuários que 'este' usuário indicou
+    # Relação para ver todos os usuários que 'este' usuário indicou (Um-para-Muitos)
     referrals: List["Usuario"] = Relationship(
         back_populates="referrer",
-        sa_relationship_kwargs={"primaryjoin": "Usuario.id == Usuario.referrer_id"}
+        sa_relationship_kwargs={
+            "primaryjoin": "Usuario.id == Usuario.referrer_id"
+        }
     )
 
 # --- Tabela: recargas_saldo ---

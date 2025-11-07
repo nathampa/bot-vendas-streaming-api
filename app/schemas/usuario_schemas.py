@@ -52,3 +52,8 @@ class RecargaAdminRead(SQLModel):
     # Dados do JOIN
     usuario_telegram_id: int
     usuario_nome_completo: str
+
+class UsuarioCreate(UsuarioBase):
+    telegram_id: int
+    nome_completo: str
+    referrer_id: Optional[int] = None # ID do Telegram de quem indicou
