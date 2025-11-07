@@ -4,11 +4,14 @@ from sqlmodel import Session, select
 from app.db.database import get_session
 from app.models.usuario_models import Usuario
 from app.schemas.usuario_schemas import UsuarioRegisterRequest, UsuarioRead
-from app.api.v1.deps import get_bot_api_key # O "Cadeado" do Bot
+from app.api.v1.deps import get_bot_api_key
 from typing import List
 from app.models.pedido_models import Pedido
 from app.models.produto_models import Produto
 from app.schemas.usuario_schemas import UsuarioPedidoRead
+from app.api.v1.deps import get_current_admin_user
+from app.schemas.usuario_schemas import UsuarioAdminRead
+from sqlalchemy import func # Para usar o COUNT
 
 # Roteador para o Bot (protegido pela API Key)
 router = APIRouter(dependencies=[Depends(get_bot_api_key)])
@@ -46,6 +49,46 @@ def get_or_create_usuario(session: Session, telegram_id: int, nome_completo: str
     return novo_usuario
 # --- Fim da Função Auxiliar ---
 
+admin_router = APIRouter(dependencies=[Depends(get_current_admin_user)])
+
+@admin_router.get("/", response_model=List[UsuarioAdminRead])
+def get_admin_usuarios(
+    *,
+    session: Session = Depends(get_session)
+):
+    """
+    [ADMIN] Lista todos os usuários clientes com contagem de pedidos.
+    """
+    stmt = (
+        select(
+            Usuario.id,
+            Usuario.telegram_id,
+            Usuario.nome_completo,
+            Usuario.saldo_carteira,
+            Usuario.criado_em,
+            func.count(Pedido.id).label("total_pedidos")
+        )
+        .join(Pedido, Pedido.usuario_id == Usuario.id, isouter=True) # isouter=True é um LEFT JOIN
+        .where(Usuario.is_admin == False) # Ignora o admin
+        .group_by(Usuario.id)
+        .order_by(Usuario.criado_em.desc())
+    )
+    
+    resultados = session.exec(stmt).all()
+    
+    # Mapeia os resultados para o schema
+    lista_usuarios = [
+        UsuarioAdminRead(
+            id=u.id,
+            telegram_id=u.telegram_id,
+            nome_completo=u.nome_completo,
+            saldo_carteira=u.saldo_carteira,
+            criado_em=u.criado_em,
+            total_pedidos=u.total_pedidos
+        ) for u in resultados
+    ]
+    
+    return lista_usuarios
 
 # --- Endpoint Novo (/start vai chamar este) ---
 @router.post("/register", response_model=UsuarioRead)

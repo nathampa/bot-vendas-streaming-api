@@ -11,6 +11,8 @@ from sqlmodel import Session, select
 from typing import List
 from app.models.base import TipoStatusPagamento
 from .usuarios import get_or_create_usuario
+from app.api.v1.deps import get_current_admin_user
+from app.schemas.usuario_schemas import RecargaAdminRead
 
 from app.db.database import get_session, engine
 from app.models.usuario_models import Usuario, RecargaSaldo
@@ -30,6 +32,39 @@ router = APIRouter()
 # Roteador para Webhooks (usado por gateways externos)
 webhook_router = APIRouter()
 
+# Router de recargas
+admin_router = APIRouter(dependencies=[Depends(get_current_admin_user)])
+
+@admin_router.get("/", response_model=List[RecargaAdminRead])
+def get_admin_recargas(
+    *,
+    session: Session = Depends(get_session)
+):
+    """
+    [ADMIN] Lista as 50 últimas recargas (pagas ou pendentes).
+    """
+    stmt = (
+        select(
+            RecargaSaldo,
+            Usuario.telegram_id,
+            Usuario.nome_completo
+        )
+        .join(Usuario, RecargaSaldo.usuario_id == Usuario.id)
+        .order_by(RecargaSaldo.criado_em.desc())
+        .limit(50)
+    )
+    
+    resultados = session.exec(stmt).all()
+    
+    # Mapeia os resultados para o schema
+    lista_recargas = []
+    for recarga, tid, nome in resultados:
+        recarga_data = RecargaAdminRead.model_validate(recarga)
+        recarga_data.usuario_telegram_id = tid
+        recarga_data.usuario_nome_completo = nome
+        lista_recargas.append(recarga_data)
+        
+    return lista_recargas
 
 @router.post("/", response_model=RecargaCreateResponse)
 def create_pedido_de_recarga(

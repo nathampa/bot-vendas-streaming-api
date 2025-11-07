@@ -69,7 +69,12 @@ api_router.include_router(
 api_router.include_router(
     dashboard.router, prefix="/admin/dashboard", tags=["Admin - Dashboard"]
 )
-
 api_router.include_router(
     pedidos.router, prefix="/admin/pedidos", tags=["Admin - Pedidos"]
+)
+api_router.include_router(
+    usuarios.admin_router, prefix="/admin/usuarios", tags=["Admin - Usuários"]
+)
+api_router.include_router(
+    recargas.admin_router, prefix="/admin/recargas", tags=["Admin - Recargas"]
 )
