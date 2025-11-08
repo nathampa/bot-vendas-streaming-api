@@ -13,6 +13,8 @@ from app.models.base import TipoStatusPagamento
 from .usuarios import get_or_create_usuario
 from app.api.v1.deps import get_current_admin_user
 from app.schemas.usuario_schemas import RecargaAdminRead
+from app.services.affiliate_service import processar_gatilho_afiliado
+from app.models.configuracao_models import TipoGatilhoAfiliado
 
 from app.db.database import get_session, engine
 from app.models.usuario_models import Usuario, RecargaSaldo
@@ -102,6 +104,19 @@ def create_pedido_de_recarga(
         nome_completo=recarga_in.nome_completo
     )
     
+    # Aplica o bônus de cashback pendente, se houver
+    bonus_percent_aplicado = None
+    if usuario.pending_cashback_percent:
+        bonus_percent_aplicado = usuario.pending_cashback_percent
+        
+        # Zera o bônus pendente do usuário IMEDIATAMENTE
+        # (para ele não gerar 2 PIX com bônus)
+        usuario.pending_cashback_percent = None
+        session.add(usuario)
+        # Não damos commit ainda, faremos junto com a recarga
+        
+        print(f"CASHBACK: Aplicando bônus de {bonus_percent_aplicado}% para recarga do usuário {usuario.telegram_id}")
+
     # Define os dados do pagamento
     payment_data = {
         "transaction_amount": float(recarga_in.valor),
@@ -144,7 +159,8 @@ def create_pedido_de_recarga(
         status_pagamento=TipoStatusPagamento.PENDENTE,
         gateway="MERCADOPAGO", # Agora é real
         gateway_id=gateway_id_real, # O ID real do MP
-        pix_copia_e_cola=pix_copia_e_cola_real
+        pix_copia_e_cola=pix_copia_e_cola_real,
+        bonus_cashback_percent=bonus_percent_aplicado
     )
 
     session.add(nova_recarga)
@@ -226,8 +242,18 @@ async def webhook_confirmacao_recarga_mp(
                     session_tx.rollback()
                     return {"status": "usuario_nao_encontrado"}
 
+                # Calcula o valor a ser creditado (incluindo bônus, se houver)
                 valor_creditado = recarga.valor_solicitado
-                novo_saldo = usuario.saldo_carteira + recarga.valor_solicitado
+                valor_bonus = Decimal("0.0")
+                
+                # Verifica se esta recarga tinha um bônus
+                if recarga.bonus_cashback_percent:
+                    bonus_pc = Decimal(recarga.bonus_cashback_percent)
+                    valor_bonus = (valor_creditado * (bonus_pc / 100)).quantize(Decimal("0.01"))
+                    print(f"CASHBACK: Creditando bônus de R$ {valor_bonus} ({bonus_pc}%)")
+                
+                # Soma o valor + bônus
+                novo_saldo = usuario.saldo_carteira + valor_creditado + valor_bonus
                 
                 usuario.saldo_carteira = novo_saldo
                 session_tx.add(usuario)
@@ -241,7 +267,23 @@ async def webhook_confirmacao_recarga_mp(
                 mensagem_para_notificar = (
                     f"✅ *Pagamento Aprovado*\n\n"
                     f"O seu PIX no valor de *R$ {valor_f}* foi confirmado\\!\n\n"
+                )
+                
+                if valor_bonus > 0:
+                    bonus_f = escape_markdown_v2(f"{valor_bonus:.2f}")
+                    mensagem_para_notificar += (
+                        f"🎉 *Bônus de Indicação:* + R$ {bonus_f}\n"
+                    )
+                
+                mensagem_para_notificar += (
                     f"O seu novo saldo é: *R$ {saldo_f}*"
+                )
+
+                processar_gatilho_afiliado(
+                    db=session_tx,
+                    usuario_indicado=usuario,
+                    valor_evento=recarga.valor_solicitado,
+                    gatilho=TipoGatilhoAfiliado.primeira_recarga
                 )
                 
                 # --- Commit da transação ---

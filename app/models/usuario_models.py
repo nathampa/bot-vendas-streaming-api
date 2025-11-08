@@ -73,6 +73,7 @@ class RecargaSaldo(SQLModel, table=True):
     gateway: str = Field(nullable=False)
     gateway_id: str = Field(nullable=True, index=True)
     pix_copia_e_cola: Optional[str] = Field(default=None)
+    bonus_cashback_percent: Optional[int] = Field(default=None, nullable=True)
     criado_em: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)
     pago_em: Optional[datetime.datetime] = Field(default=None)
 
