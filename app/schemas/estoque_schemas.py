@@ -1,4 +1,5 @@
 import uuid
+import datetime
 from decimal import Decimal
 from typing import Optional
 from sqlmodel import SQLModel
@@ -11,6 +12,7 @@ class EstoqueCreate(SQLModel):
     login: str
     senha: str  # A API receberá em texto plano e irá criptografar
     max_slots: int = 2
+    data_expiracao: Optional[datetime.date] = None
 
 # -----------------------------------------------------------------
 # Schema para LEITURA (o que o Admin vê na lista do painel)
@@ -25,6 +27,8 @@ class EstoqueAdminRead(SQLModel):
     slots_ocupados: int
     is_ativo: bool
     requer_atencao: bool
+    data_expiracao: Optional[datetime.date] = None
+    dias_restantes: Optional[int] = None
 
 # -----------------------------------------------------------------
 # Schema para LEITURA DE DETALHES (o que o Admin vê em UMA conta)
@@ -43,3 +47,4 @@ class EstoqueUpdate(SQLModel):
     slots_ocupados: Optional[int] = None
     is_ativo: Optional[bool] = None
     requer_atencao: Optional[bool] = None
+    data_expiracao: Optional[datetime.date] = None

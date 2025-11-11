@@ -1,4 +1,5 @@
 import uuid
+import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
 from typing import List
@@ -64,8 +65,25 @@ def get_lista_estoque(session: Session = Depends(get_session)):
     [ADMIN] Lista todas as contas em estoque.
     (Não retorna as senhas).
     """
-    contas = session.exec(select(EstoqueConta)).all()
-    return contas
+    contas_db = session.exec(select(EstoqueConta)).all()
+
+    contas_com_dias = []
+    today = datetime.date.today()
+
+    for conta in contas_db:
+        # Converte para o schema de Pydantic
+        conta_schema = EstoqueAdminRead.model_validate(conta)
+        
+        # Calcula os dias restantes
+        if conta.data_expiracao:
+            delta = conta.data_expiracao - today
+            conta_schema.dias_restantes = delta.days
+        else:
+            conta_schema.dias_restantes = None
+            
+        contas_com_dias.append(conta_schema)
+        
+    return contas_com_dias
 
 
 @router.get(
@@ -91,6 +109,11 @@ def get_detalhe_conta_estoque(
     # Usamos o model EstoqueAdminReadDetails
     response_data = EstoqueAdminReadDetails.model_validate(conta)
     response_data.senha = senha_descriptografada
+    
+    if conta.data_expiracao:
+        today = datetime.date.today()
+        delta = conta.data_expiracao - today
+        response_data.dias_restantes = delta.days
     
     return response_data
 

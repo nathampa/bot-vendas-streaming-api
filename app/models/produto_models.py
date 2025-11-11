@@ -39,6 +39,7 @@ class EstoqueConta(SQLModel, table=True):
     requer_atencao: bool = Field(default=False, nullable=False)
     criado_em: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)
     atualizado_em: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False, sa_column_kwargs={"onupdate": datetime.datetime.utcnow})
+    data_expiracao: Optional[datetime.date] = Field(default=None, nullable=True)
 
     # Chave Estrangeira
     produto_id: uuid.UUID = Field(foreign_key="produto.id", nullable=False)
