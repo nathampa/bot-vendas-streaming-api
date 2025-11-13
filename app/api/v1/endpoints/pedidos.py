@@ -178,19 +178,25 @@ def entregar_pedido_manual(
         
         # 7. Notifica o Cliente
         try:
+            # 7a. Escapamos APENAS as variáveis que vêm do banco/input
             produto_nome_f = escape_markdown_v2(produto.nome)
             login_f = escape_markdown_v2(entrega_in.login)
             senha_f = escape_markdown_v2(entrega_in.senha)
             instrucoes_f = escape_markdown_v2(produto.instrucoes_pos_compra or "Siga as instruções do produto.")
             
+            # 7b. Montamos a mensagem com nosso markdown VÁLIDO
+            #     Note que os '\' SÃO necessários para os caracteres
+            #     que NÓS estamos adicionando (como '!', '.', '-')
             message = (
-                f"✅ *Entrega Concluída!*\n\n"
+                f"✅ *Entrega Concluída\\!*\n\n"
                 f"O seu pedido do produto *{produto_nome_f}* está pronto\\!\n\n"
                 f"Login: `{login_f}`\n"
                 f"Senha: `{senha_f}`\n\n"
                 f"**Instruções Importantes:**\n{instrucoes_f}\n\n"
                 f"⚠️ *Por favor, não altere a senha\\! Apenas 1 utilizador por conta\\. RISCO DE PERDER O SEU ACESSO\\!*"
             )
+            
+            # 7c. Enviamos a mensagem
             send_telegram_message(telegram_id=usuario.telegram_id, message_text=message)
             
         except Exception as e_notify:
