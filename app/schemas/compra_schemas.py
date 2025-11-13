@@ -2,6 +2,7 @@ import uuid
 import datetime
 from decimal import Decimal
 from typing import Optional
+from app.models.base import TipoEntregaProduto
 from sqlmodel import SQLModel
 
 # -----------------------------------------------------------------
@@ -26,5 +27,5 @@ class CompraCreateResponse(SQLModel):
     produto_nome: str
     login: Optional[str] = None
     senha: Optional[str] = None
-    requer_email_cliente: bool
+    tipo_entrega: TipoEntregaProduto
     mensagem_entrega: str

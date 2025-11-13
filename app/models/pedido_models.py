@@ -3,6 +3,7 @@ import datetime
 from decimal import Decimal
 from typing import Optional, TYPE_CHECKING
 from sqlmodel import Field, SQLModel, Relationship
+from app.models.base import StatusEntregaPedido
 
 # Usamos o TYPE_CHECKING para importar classes
 # que também dependem desta, evitando erros de importação circular.
@@ -17,6 +18,10 @@ class Pedido(SQLModel, table=True):
     valor_pago: Decimal = Field(max_digits=10, decimal_places=2, nullable=False)
     criado_em: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)
     email_cliente: Optional[str] = Field(default=None, nullable=True, index=True)
+    status_entrega: StatusEntregaPedido = Field(
+        default=StatusEntregaPedido.ENTREGUE, 
+        nullable=False
+    )
 
     # --- Chaves Estrangeiras ---
     usuario_id: uuid.UUID = Field(foreign_key="usuario.id", nullable=False)

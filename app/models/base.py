@@ -29,7 +29,11 @@ class TipoMotivoTicket(str, enum.Enum):
     CONTA_CAIU = "CONTA_CAIU"
     OUTRO = "OUTRO"
 
-# --- Classe Base ---
-# (Não precisamos de uma classe base customizada com SQLModel,
-# podemos usar o SQLModel diretamente. Este arquivo
-# servirá para guardar nossos ENUMs e tipos compartilhados.)
+class TipoEntregaProduto(str, enum.Enum):
+    AUTOMATICA = "AUTOMATICA"
+    SOLICITA_EMAIL = "SOLICITA_EMAIL"
+    MANUAL_ADMIN = "MANUAL_ADMIN"
+
+class StatusEntregaPedido(str, enum.Enum):
+    ENTREGUE = "ENTREGUE"
+    PENDENTE = "PENDENTE"

@@ -2,6 +2,7 @@ import uuid
 from decimal import Decimal
 from typing import Optional
 from sqlmodel import SQLModel
+from app.models.base import TipoEntregaProduto
 import datetime
 
 # SQLModel pode ser usado como um 'schema' Pydantic puro
@@ -15,7 +16,7 @@ class ProdutoRead(SQLModel):
     nome: str
     descricao: Optional[str]
     preco: Decimal
-    requer_email_cliente: bool
+    tipo_entrega: TipoEntregaProduto
 
 # -----------------------------------------------------------------
 # Schema para CRIAÇÃO (o que o Admin usa no painel)
@@ -26,7 +27,7 @@ class ProdutoCreate(SQLModel):
     instrucoes_pos_compra: Optional[str] = None
     preco: Decimal
     is_ativo: bool = True
-    requer_email_cliente: bool = False
+    tipo_entrega: TipoEntregaProduto = TipoEntregaProduto.AUTOMATICA
 
 # -----------------------------------------------------------------
 # Schema para ATUALIZAÇÃO (o que o Admin usa no painel)
@@ -37,7 +38,7 @@ class ProdutoUpdate(SQLModel):
     instrucoes_pos_compra: Optional[str] = None
     preco: Optional[Decimal] = None
     is_ativo: Optional[bool] = None
-    requer_email_cliente: Optional[bool] = None
+    tipo_entrega: Optional[TipoEntregaProduto] = None
 
 class ProdutoAdminRead(ProdutoRead):
     is_ativo: bool
