@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlmodel import Session, select
+from sqlmodel import Session, select, desc
 from typing import List
 
 from app.db.database import get_session
@@ -69,9 +69,14 @@ def create_produto(
 )
 def get_todos_os_produtos(session: Session = Depends(get_session)):
     """
-    [ADMIN] Lista TODOS os produtos (ativos e inativos).
+    [ADMIN] Lista todos os produtos (ativos e inativos).
+    Ordenados por Ativo > Inativo, e depois por Nome.
     """
-    produtos = session.exec(select(Produto)).all()
+    stmt = select(Produto).order_by(
+        desc(Produto.is_ativo), # Ordena por Ativo (descendente, true vem primeiro)
+        Produto.nome            # Ordena alfabeticamente
+    )
+    produtos = session.exec(stmt).all()
     return produtos
 
 @admin_router.put(
@@ -100,7 +105,6 @@ def update_produto(
     session.refresh(produto)
     return produto
 
-# ==================== NOVO ENDPOINT ====================
 @admin_router.delete(
     "/{produto_id}",
     status_code=status.HTTP_204_NO_CONTENT,
