@@ -91,7 +91,23 @@ def create_compra_com_saldo(
                 if not senha_descriptografada:
                     raise HTTPException(status_code=500, detail="Erro interno ao obter credenciais.")
                 senha_entrega = senha_descriptografada
-                mensagem_entrega = produto.instrucoes_pos_compra or "Aqui estão suas credenciais:"
+                
+                # --- NOVA LÓGICA DE MENSAGEM ---
+                msgs = []
+                # 1. Instrução Geral do Produto
+                if produto.instrucoes_pos_compra:
+                    msgs.append(produto.instrucoes_pos_compra)
+                
+                # 2. Instrução Específica da Conta
+                if conta_alocada.instrucoes_especificas:
+                    msgs.append(f"📌 **Nota da Conta:**\n{conta_alocada.instrucoes_especificas}")
+                
+                if msgs:
+                    mensagem_entrega = "\n\n".join(msgs)
+                else:
+                    mensagem_entrega = "Aqui estão suas credenciais:"
+                # -------------------------------
+
                 status_entrega_pedido = StatusEntregaPedido.ENTREGUE
 
             case TipoEntregaProduto.SOLICITA_EMAIL:

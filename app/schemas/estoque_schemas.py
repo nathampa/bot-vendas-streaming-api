@@ -1,24 +1,16 @@
 import uuid
 import datetime
-from decimal import Decimal
 from typing import Optional
 from sqlmodel import SQLModel
 
-# -----------------------------------------------------------------
-# Schema para CRIAÇÃO (o que o Admin envia para abastecer)
-# -----------------------------------------------------------------
 class EstoqueCreate(SQLModel):
-    produto_id: uuid.UUID  # O ID do Produto (ex: "Netflix") ao qual esta conta pertence
+    produto_id: uuid.UUID
     login: str
-    senha: str  # A API receberá em texto plano e irá criptografar
+    senha: str
     max_slots: int = 2
     data_expiracao: Optional[datetime.date] = None
+    instrucoes_especificas: Optional[str] = None
 
-# -----------------------------------------------------------------
-# Schema para LEITURA (o que o Admin vê na lista do painel)
-# -----------------------------------------------------------------
-# Nota: NÃO incluímos a senha aqui por segurança.
-# A senha só é mostrada ao clicar em "Ver Detalhes".
 class EstoqueAdminRead(SQLModel):
     id: uuid.UUID
     produto_id: uuid.UUID
@@ -29,22 +21,17 @@ class EstoqueAdminRead(SQLModel):
     requer_atencao: bool
     data_expiracao: Optional[datetime.date] = None
     dias_restantes: Optional[int] = None
+    instrucoes_especificas: Optional[str] = None
 
-# -----------------------------------------------------------------
-# Schema para LEITURA DE DETALHES (o que o Admin vê em UMA conta)
-# -----------------------------------------------------------------
-# Este schema SIM, inclui a senha (descriptografada)
 class EstoqueAdminReadDetails(EstoqueAdminRead):
-    senha: Optional[str] # Será preenchido com a senha descriptografada
+    senha: Optional[str]
 
-# -----------------------------------------------------------------
-# Schema para ATUALIZAÇÃO (o que o Admin usa para editar)
-# -----------------------------------------------------------------
 class EstoqueUpdate(SQLModel):
     login: Optional[str] = None
-    senha: Optional[str] = None # Se uma nova senha for enviada, a API irá criptografá-la
+    senha: Optional[str] = None
     max_slots: Optional[int] = None
     slots_ocupados: Optional[int] = None
     is_ativo: Optional[bool] = None
     requer_atencao: Optional[bool] = None
     data_expiracao: Optional[datetime.date] = None
+    instrucoes_especificas: Optional[str] = None
