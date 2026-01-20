@@ -1,10 +1,12 @@
 import uuid
 import datetime
+from typing import Optional
 from sqlmodel import Session, select
 
 from app.worker.celery_app import celery_app
 from app.db.database import engine # Importamos o 'engine' do banco
 from app.services import security # Para descriptografar a nova senha
+from app.services.notification_service import send_telegram_message, escape_markdown_v2
 from app.models.base import TipoStatusTicket, TipoResolucaoTicket
 from app.models.usuario_models import Usuario
 from app.models.pedido_models import Pedido
@@ -97,7 +99,7 @@ def handle_trocar_conta(session: Session, ticket: TicketSuporte):
     # TODO: Enviar notificação ao usuário com as novas credenciais
     print(f"Sucesso: Ticket {ticket.id} resolvido com Hot-Swap. Nova conta: {nova_conta.login} / {senha}")
 
-def handle_fechar_manualmente(session: Session, ticket: TicketSuporte):
+def handle_fechar_manualmente(session: Session, ticket: TicketSuporte, mensagem: Optional[str] = None):
     """
     Lógica para simplesmente fechar o ticket.
     (Assume que o admin resolveu por fora ou era um ticket falso).
@@ -109,11 +111,31 @@ def handle_fechar_manualmente(session: Session, ticket: TicketSuporte):
     session.add(ticket)
     # Nota: A conta 'requer_atencao' continua 'true'
     # O Admin deve reativá-la manualmente se desejar.
+    
+    try:
+        usuario = session.get(Usuario, ticket.usuario_id)
+        pedido = session.get(Pedido, ticket.pedido_id)
+        produto = session.get(Produto, pedido.produto_id) if pedido else None
+        produto_nome = escape_markdown_v2(produto.nome) if produto else "produto"
+
+        mensagem_extra = ""
+        if mensagem and mensagem.strip():
+            mensagem_limpa = escape_markdown_v2(mensagem.strip())
+            mensagem_extra = f"\n\nMensagem do suporte:\n{mensagem_limpa}"
+
+        message = (
+            f"✅ *Ticket Fechado Manualmente*\n\n"
+            f"O seu ticket para *{produto_nome}* foi fechado manualmente\\."
+            f"{mensagem_extra}"
+        )
+        send_telegram_message(telegram_id=usuario.telegram_id, message_text=message)
+    except Exception as e_notify:
+        print(f"ERRO: Falha ao enviar notificação de fechamento para {ticket.usuario_id}: {e_notify}")
 
 # --- A Tarefa Principal do Celery ---
 
 @celery_app.task(name="resolver_ticket")
-def resolver_ticket(ticket_id: str, acao: str):
+def resolver_ticket(ticket_id: str, acao: str, mensagem: Optional[str] = None):
     """
     Tarefa Celery (real) para processar a resolução de um ticket.
     Cria a sua própria sessão de banco de dados.
@@ -143,7 +165,7 @@ def resolver_ticket(ticket_id: str, acao: str):
             elif acao == "TROCAR_CONTA":
                 handle_trocar_conta(session, ticket)
             elif acao == "FECHAR_MANUALMENTE":
-                handle_fechar_manualmente(session, ticket)
+                handle_fechar_manualmente(session, ticket, mensagem)
             else:
                 raise Exception(f"Ação desconhecida: {acao}")
 

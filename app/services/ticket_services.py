@@ -1,5 +1,6 @@
 import uuid
 import datetime
+from typing import Optional
 from sqlmodel import Session, select
 
 # 1. REMOVEMOS a importação do 'celery_app'
@@ -131,7 +132,7 @@ def handle_trocar_conta(session: Session, ticket: TicketSuporte):
         print(f"ERRO: Falha ao enviar notificação de troca de conta para {usuario_tid}: {e_notify}")
     print(f"Sucesso: Ticket {ticket.id} resolvido com Hot-Swap. Nova conta: {nova_conta.login} / {senha}")
 
-def handle_fechar_manualmente(session: Session, ticket: TicketSuporte):
+def handle_fechar_manualmente(session: Session, ticket: TicketSuporte, mensagem: Optional[str] = None):
     """
     Lógica para simplesmente fechar o ticket.
     """
@@ -140,11 +141,31 @@ def handle_fechar_manualmente(session: Session, ticket: TicketSuporte):
     ticket.resolucao = TipoResolucaoTicket.MANUAL
     ticket.atualizado_em = datetime.datetime.utcnow()
     session.add(ticket)
+    
+    try:
+        usuario = session.get(Usuario, ticket.usuario_id)
+        pedido = session.get(Pedido, ticket.pedido_id)
+        produto = session.get(Produto, pedido.produto_id) if pedido else None
+        produto_nome = escape_markdown_v2(produto.nome) if produto else "produto"
+
+        mensagem_extra = ""
+        if mensagem and mensagem.strip():
+            mensagem_limpa = escape_markdown_v2(mensagem.strip())
+            mensagem_extra = f"\n\nMensagem do suporte:\n{mensagem_limpa}"
+
+        message = (
+            f"✅ *Ticket Fechado Manualmente*\n\n"
+            f"O seu ticket para *{produto_nome}* foi fechado manualmente\\."
+            f"{mensagem_extra}"
+        )
+        send_telegram_message(telegram_id=usuario.telegram_id, message_text=message)
+    except Exception as e_notify:
+        print(f"ERRO: Falha ao enviar notificação de fechamento para {ticket.usuario_id}: {e_notify}")
 
 # --- A Tarefa Principal (Agora é uma função normal) ---
 
 # 2. REMOVEMOS o decorador '@celery_app.task'
-def resolver_ticket_task(ticket_id: str, acao: str): # Renomeamos para 'resolver_ticket_task'
+def resolver_ticket_task(ticket_id: str, acao: str, mensagem: Optional[str] = None): # Renomeamos para 'resolver_ticket_task'
     """
     Tarefa (agora em background) para processar a resolução de um ticket.
     Cria a sua própria sessão de banco de dados.
@@ -174,7 +195,7 @@ def resolver_ticket_task(ticket_id: str, acao: str): # Renomeamos para 'resolver
             elif acao == "TROCAR_CONTA":
                 handle_trocar_conta(session, ticket)
             elif acao == "FECHAR_MANUALMENTE":
-                handle_fechar_manualmente(session, ticket)
+                handle_fechar_manualmente(session, ticket, mensagem)
             else:
                 raise Exception(f"Ação desconhecida: {acao}")
 

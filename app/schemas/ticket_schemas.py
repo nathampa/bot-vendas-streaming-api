@@ -40,6 +40,7 @@ class TicketAdminRead(SQLModel):
 class TicketResolveRequest(SQLModel):
     # Ex: "TROCAR_CONTA", "REEMBOLSAR_CARTEIRA", "FECHAR_MANUALMENTE"
     acao: str
+    mensagem: Optional[str] = None
 
 # -----------------------------------------------------------------
 # Schema de ADMIN (Detalhes de UM ticket)
@@ -53,4 +54,4 @@ class TicketAdminReadDetails(TicketAdminRead):
     # Informação extra que o endpoint irá preencher:
     usuario_telegram_id: int
     produto_nome: str
-    conta_problematica: EstoqueAdminReadDetails # Mostra a conta (com senha)
+    conta_problematica: Optional[EstoqueAdminReadDetails] = None # Mostra a conta (com senha)

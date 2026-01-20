@@ -66,20 +66,22 @@ def create_ticket_suporte(
         if existing_ticket:
             raise HTTPException(status_code=409, detail="Já existe um ticket de suporte para este pedido.")
 
-        # 5. Ação Crítica: Marcar a conta como defeituosa
-        conta_problematica = session.get(EstoqueConta, pedido.estoque_conta_id)
-        if not conta_problematica:
-            raise HTTPException(status_code=500, detail="Conta de estoque associada ao pedido não foi encontrada.")
-        
-        conta_problematica.requer_atencao = True
-        session.add(conta_problematica)
+        # 5. Ação Crítica: Marcar a conta como defeituosa (se houver conta)
+        conta_problematica = None
+        if pedido.estoque_conta_id:
+            conta_problematica = session.get(EstoqueConta, pedido.estoque_conta_id)
+            if not conta_problematica:
+                raise HTTPException(status_code=500, detail="Conta de estoque associada ao pedido não foi encontrada.")
+            
+            conta_problematica.requer_atencao = True
+            session.add(conta_problematica)
         
         # 6. Criar o Ticket
         novo_ticket = TicketSuporte.model_validate(
             ticket_in, 
             update={
                 "usuario_id": usuario.id,
-                "estoque_conta_id": conta_problematica.id,
+                "estoque_conta_id": conta_problematica.id if conta_problematica else None,
                 "status": TipoStatusTicket.ABERTO
             }
         )
@@ -133,25 +135,23 @@ def get_detalhe_ticket(
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket não encontrado.")
 
-    # 2. Obter os dados relacionados (Usuário, Pedido, Produto, Conta)
+    # 2. Obter os dados relacionados (Usuário, Pedido, Produto)
     # (Usamos .one() para garantir que existem, ou falhará)
     try:
         usuario = session.exec(select(Usuario).where(Usuario.id == ticket.usuario_id)).one()
         pedido = session.exec(select(Pedido).where(Pedido.id == ticket.pedido_id)).one()
-        conta = session.exec(select(EstoqueConta).where(EstoqueConta.id == ticket.estoque_conta_id)).one()
         produto = session.exec(select(Produto).where(Produto.id == pedido.produto_id)).one()
+        conta_details = None
+        if ticket.estoque_conta_id:
+            conta = session.exec(select(EstoqueConta).where(EstoqueConta.id == ticket.estoque_conta_id)).one()
+            senha_descriptografada = security.decrypt_data(conta.senha)
+            conta_details = SchemaEstoqueDetails.model_validate(conta)
+            conta_details.senha = senha_descriptografada
     except Exception as e:
         print(f"Erro ao buscar dados relacionados ao ticket: {e}")
         raise HTTPException(status_code=404, detail="Dados relacionados ao ticket (usuário, pedido, etc.) não encontrados.")
 
-    # 3. Descriptografar a senha da conta problemática
-    senha_descriptografada = security.decrypt_data(conta.senha)
-
-    # 4. Construir o sub-schema da conta
-    conta_details = SchemaEstoqueDetails.model_validate(conta)
-    conta_details.senha = senha_descriptografada
-
-    # 5. Construir a resposta detalhada (schema 'TicketAdminReadDetails')
+    # 3. Construir a resposta detalhada (schema 'TicketAdminReadDetails')
     #    NÃO USAMOS model_validate(ticket)
     #    Nós construímos o objeto 'TicketAdminReadDetails' manualmente
     #    passando todos os campos que ele espera.
@@ -202,6 +202,9 @@ def request_resolucao_ticket(
     acao = resolve_in.acao.upper()
     if acao not in ("TROCAR_CONTA", "REEMBOLSAR_CARTEIRA", "FECHAR_MANUALMENTE"):
         raise HTTPException(status_code=400, detail=f"Ação '{acao}' inválida.")
+
+    if acao == "TROCAR_CONTA" and not ticket.estoque_conta_id:
+        raise HTTPException(status_code=400, detail="Este ticket não possui conta para troca.")
         
     # 2. Mudar o status para "Em Análise" (para evitar duplicação)
     ticket.status = TipoStatusTicket.EM_ANALISE
@@ -213,7 +216,8 @@ def request_resolucao_ticket(
     background_tasks.add_task(
         resolver_ticket_task,
         ticket_id=str(ticket.id), 
-        acao=acao
+        acao=acao,
+        mensagem=resolve_in.mensagem
     )
     
     return {"message": "Solicitação de resolução recebida.", "ticket_id": ticket.id, "acao": acao}

@@ -27,10 +27,12 @@ class TicketSuporte(SQLModel, table=True):
 
     usuario_id: uuid.UUID = Field(foreign_key="usuario.id", nullable=False)
     pedido_id: uuid.UUID = Field(foreign_key="pedido.id", nullable=False, unique=True)
-    estoque_conta_id: uuid.UUID = Field(foreign_key="estoqueconta.id", nullable=False)
+    estoque_conta_id: Optional[uuid.UUID] = Field(
+        default=None, foreign_key="estoqueconta.id", nullable=True
+    )
 
     usuario: "Usuario" = Relationship(back_populates="tickets")
-    estoque_conta: "EstoqueConta" = Relationship(back_populates="tickets_problema")
+    estoque_conta: Optional["EstoqueConta"] = Relationship(back_populates="tickets_problema")
     pedido: "Pedido" = Relationship(back_populates="ticket")
 
 # --- Tabela: gift_cards ---
