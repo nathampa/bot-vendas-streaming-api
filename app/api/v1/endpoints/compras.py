@@ -71,7 +71,10 @@ def create_compra_com_saldo(
                     .where(EstoqueConta.is_ativo == True)
                     .where(EstoqueConta.requer_atencao == False)
                     .where(EstoqueConta.slots_ocupados < EstoqueConta.max_slots)
-                    .order_by(EstoqueConta.slots_ocupados) 
+                    .order_by(
+                        EstoqueConta.data_expiracao.asc().nulls_last(),
+                        EstoqueConta.slots_ocupados,
+                    )
                     .limit(1)
                     .with_for_update(skip_locked=True)
                 )
