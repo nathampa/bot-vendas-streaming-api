@@ -9,7 +9,7 @@ from app.api.v1.deps import get_bot_api_key
 
 # Este é o roteador principal da v1
 api_router = APIRouter()
-#teste webhook github
+#teste webhook githubb
 # --- Rotas do Bot (AGORA PROTEGIDAS) ---
 bot_deps = [Depends(get_bot_api_key)]
 
