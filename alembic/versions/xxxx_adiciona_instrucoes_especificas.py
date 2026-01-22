@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 # ATENÇÃO: Substitua 'xxxx' pelo ID gerado automaticamente se usar o comando alembic revision
-revision: str = 'xxxx_adiciona_instrucoes_especificas'
+revision: str = 'xxxx'
 down_revision: Union[str, Sequence[str], None] = '321a7ab448cc' # Aponta para a última revisão conhecida
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
