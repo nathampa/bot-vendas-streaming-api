@@ -7,6 +7,7 @@ from sqlalchemy.exc import NoResultFound
 from app.db.database import get_session
 from app.models.usuario_models import Usuario
 from app.models.produto_models import Produto, EstoqueConta
+from app.models.conta_mae_models import ContaMae, ContaMaeConvite
 from app.models.pedido_models import Pedido
 from app.models.base import TipoEntregaProduto, StatusEntregaPedido
 from app.schemas.compra_schemas import CompraCreateRequest, CompraCreateResponse
@@ -52,6 +53,7 @@ def create_compra_com_saldo(
 
         # Variáveis que vamos preencher
         conta_para_alocar_id = None
+        conta_mae_para_alocar_id = None
         login_entrega = None
         senha_entrega = None
         mensagem_entrega = ""
@@ -123,7 +125,35 @@ def create_compra_com_saldo(
                         detail="Este produto requer um email de cliente para a entrega."
                     )
                 
-                conta_para_alocar_id = None 
+                conta_para_alocar_id = None
+                conta_mae_para_alocar_id = None
+
+                today = datetime.date.today()
+                stmt = (
+                    select(ContaMae)
+                    .where(ContaMae.produto_id == produto.id)
+                    .where(ContaMae.is_ativo == True)
+                    .where(ContaMae.slots_ocupados < ContaMae.max_slots)
+                    .where(
+                        (ContaMae.data_expiracao == None) | (ContaMae.data_expiracao >= today)
+                    )
+                    .order_by(
+                        ContaMae.data_expiracao.desc().nulls_last(),
+                        ContaMae.criado_em.asc(),
+                    )
+                    .limit(1)
+                    .with_for_update(skip_locked=True)
+                )
+                conta_mae = session.exec(stmt).first()
+                if not conta_mae:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Nenhuma conta mÃ£e disponÃ­vel para este produto."
+                    )
+
+                conta_mae_para_alocar_id = conta_mae.id
+                conta_mae.slots_ocupados += 1
+                session.add(conta_mae)
                 login_entrega = None
                 senha_entrega = None
                 instrucao_customizada = produto.instrucoes_pos_compra or "A entrega é manual e pode levar alguns minutos."
@@ -153,11 +183,21 @@ def create_compra_com_saldo(
             usuario_id=usuario.id,
             produto_id=produto.id,
             estoque_conta_id=conta_para_alocar_id,
+            conta_mae_id=conta_mae_para_alocar_id,
             valor_pago=valor_pago,
             email_cliente=compra_in.email_cliente,
             status_entrega=status_entrega_pedido
         )
         session.add(novo_pedido)
+        session.flush()
+
+        if conta_mae_para_alocar_id and compra_in.email_cliente:
+            convite = ContaMaeConvite(
+                conta_mae_id=conta_mae_para_alocar_id,
+                pedido_id=novo_pedido.id,
+                email_cliente=compra_in.email_cliente
+            )
+            session.add(convite)
         
         # --- 6. Commit e Retorno ---
         session.commit()

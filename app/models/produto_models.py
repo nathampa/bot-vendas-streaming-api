@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from app.models.pedido_models import Pedido
     from app.models.suporte_models import TicketSuporte
+    from app.models.conta_mae_models import ContaMae
 
 class Produto(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -26,6 +27,7 @@ class Produto(SQLModel, table=True):
     atualizado_em: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False, sa_column_kwargs={"onupdate": datetime.datetime.utcnow})
     
     contas_estoque: List["EstoqueConta"] = Relationship(back_populates="produto")
+    contas_mae: List["ContaMae"] = Relationship(back_populates="produto")
     pedidos: List["Pedido"] = Relationship(back_populates="produto")
 
 class EstoqueConta(SQLModel, table=True):

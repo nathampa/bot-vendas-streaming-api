@@ -1,4 +1,5 @@
 import uuid
+import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
 from typing import List
@@ -7,11 +8,13 @@ from app.db.database import get_session
 from app.models.usuario_models import Usuario
 from app.models.pedido_models import Pedido
 from app.models.produto_models import Produto, EstoqueConta
+from app.models.conta_mae_models import ContaMae
 from app.models.base import StatusEntregaPedido
 from app.schemas.pedido_schemas import (
     PedidoAdminList,
     PedidoAdminDetails,
     PedidoAdminConta,
+    PedidoAdminContaMae,
     PedidoAdminEntregaRequest
 )
 from app.api.v1.deps import get_current_admin_user
@@ -70,11 +73,15 @@ def get_pedido_detalhes(
             Usuario.nome_completo.label("usuario_nome_completo"),
             Usuario.telegram_id.label("usuario_telegram_id"),
             EstoqueConta.login,
-            EstoqueConta.senha  # Senha CRIPTOGRAFADA
+            EstoqueConta.senha,  # Senha CRIPTOGRAFADA
+            ContaMae.id,
+            ContaMae.login,
+            ContaMae.data_expiracao,
         )
         .join(Produto, Pedido.produto_id == Produto.id)
         .join(Usuario, Pedido.usuario_id == Usuario.id)
         .join(EstoqueConta, Pedido.estoque_conta_id == EstoqueConta.id, isouter=True)
+        .join(ContaMae, Pedido.conta_mae_id == ContaMae.id, isouter=True)
         .where(Pedido.id == pedido_id)
     )
     
@@ -86,7 +93,8 @@ def get_pedido_detalhes(
     # 2. Desempacota os resultados
     (
         pedido, produto_nome, usuario_nome, 
-        usuario_tid, conta_login, conta_senha_cripto
+        usuario_tid, conta_login, conta_senha_cripto,
+        conta_mae_id, conta_mae_login, conta_mae_expiracao,
     ) = resultado
     
     
@@ -101,6 +109,20 @@ def get_pedido_detalhes(
             login=conta_login,
             senha=senha_descriptografada
         )
+
+    conta_mae_info = None
+    if conta_mae_id and conta_mae_login:
+        dias_restantes = None
+        if conta_mae_expiracao:
+            delta = conta_mae_expiracao - datetime.date.today()
+            dias_restantes = delta.days
+
+        conta_mae_info = PedidoAdminContaMae(
+            id=conta_mae_id,
+            login=conta_mae_login,
+            data_expiracao=conta_mae_expiracao,
+            dias_restantes=dias_restantes,
+        )
     
     # 4. Monta o schema de resposta
     detalhes_pedido = PedidoAdminDetails(
@@ -112,7 +134,8 @@ def get_pedido_detalhes(
         produto_nome=produto_nome,
         usuario_nome_completo=usuario_nome,
         usuario_telegram_id=usuario_tid,
-        conta=conta_info # Aninha os detalhes da conta (pode ser None)
+        conta=conta_info, # Aninha os detalhes da conta (pode ser None)
+        conta_mae=conta_mae_info,
     )
     
     return detalhes_pedido

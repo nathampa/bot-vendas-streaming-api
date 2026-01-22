@@ -12,6 +12,12 @@ class PedidoAdminConta(SQLModel):
     login: str
     senha: str # A API vai preencher isso com a senha descriptografada
 
+class PedidoAdminContaMae(SQLModel):
+    id: uuid.UUID
+    login: str
+    data_expiracao: Optional[datetime.date] = None
+    dias_restantes: Optional[int] = None
+
 # -----------------------------------------------------------------
 # Schema de REQUEST (O que o Admin envia para ENTREGAR um pedido)
 # -----------------------------------------------------------------
@@ -40,3 +46,4 @@ class PedidoAdminList(SQLModel):
 class PedidoAdminDetails(PedidoAdminList):
     # Herda tudo da lista e adiciona a conta
     conta: Optional[PedidoAdminConta] = None
+    conta_mae: Optional[PedidoAdminContaMae] = None

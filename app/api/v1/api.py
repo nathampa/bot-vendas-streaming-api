@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 
 # Importa todos os nossos endpoints
 from app.api.v1.endpoints import (
-    produtos, auth, estoque, recargas, compras, tickets, giftcards, sugestoes, dashboard, usuarios, pedidos, configuracoes
+    produtos, auth, estoque, recargas, compras, tickets, giftcards, sugestoes, dashboard, usuarios, pedidos, configuracoes, contas_mae
 )
 # Importa o nosso novo "cadeado"
 from app.api.v1.deps import get_bot_api_key
@@ -80,4 +80,7 @@ api_router.include_router(
 )
 api_router.include_router(
     configuracoes.router, prefix="/admin/configuracoes", tags=["Admin - Configurações"]
+)
+api_router.include_router(
+    contas_mae.router, prefix="/admin/contas-mae", tags=["Admin - Contas Mãe"]
 )

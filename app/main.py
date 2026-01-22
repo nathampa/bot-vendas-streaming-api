@@ -5,12 +5,21 @@ from typing import Optional, List, TYPE_CHECKING
 from app.models.base import *
 from app.models.usuario_models import Usuario, RecargaSaldo, SugestaoStreaming
 from app.models.produto_models import Produto, EstoqueConta
+from app.models.conta_mae_models import ContaMae, ContaMaeConvite
 from app.models.pedido_models import Pedido
 from app.models.suporte_models import TicketSuporte, GiftCard
 
-from app.schemas.pedido_schemas import PedidoAdminConta, PedidoAdminList, PedidoAdminDetails
+from app.schemas.pedido_schemas import PedidoAdminConta, PedidoAdminList, PedidoAdminDetails, PedidoAdminContaMae
 from app.schemas.produto_schemas import ProdutoRead, ProdutoCreate, ProdutoUpdate, ProdutoAdminRead
 from app.schemas.compra_schemas import CompraCreateRequest, CompraCreateResponse
+from app.schemas.conta_mae_schemas import (
+    ContaMaeCreate,
+    ContaMaeUpdate,
+    ContaMaeAdminRead,
+    ContaMaeAdminDetails,
+    ContaMaeConviteRead,
+    ContaMaeConviteCreate,
+)
 
 print("Reconstruindo modelos e schemas SQLModel...")
 Usuario.model_rebuild()
@@ -18,6 +27,8 @@ RecargaSaldo.model_rebuild()
 SugestaoStreaming.model_rebuild()
 Produto.model_rebuild()
 EstoqueConta.model_rebuild()
+ContaMae.model_rebuild()
+ContaMaeConvite.model_rebuild()
 Pedido.model_rebuild()
 TicketSuporte.model_rebuild()
 GiftCard.model_rebuild()
@@ -29,8 +40,15 @@ ProdutoAdminRead.model_rebuild()
 CompraCreateRequest.model_rebuild()
 CompraCreateResponse.model_rebuild()
 PedidoAdminConta.model_rebuild()
+PedidoAdminContaMae.model_rebuild()
 PedidoAdminList.model_rebuild()
 PedidoAdminDetails.model_rebuild()
+ContaMaeCreate.model_rebuild()
+ContaMaeUpdate.model_rebuild()
+ContaMaeAdminRead.model_rebuild()
+ContaMaeAdminDetails.model_rebuild()
+ContaMaeConviteRead.model_rebuild()
+ContaMaeConviteCreate.model_rebuild()
 
 print("Modelos e schemas reconstruídos com sucesso.")
 
