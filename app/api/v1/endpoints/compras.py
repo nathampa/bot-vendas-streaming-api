@@ -148,7 +148,7 @@ def create_compra_com_saldo(
                 if not conta_mae:
                     raise HTTPException(
                         status_code=404,
-                        detail="Nenhuma conta mÃ£e disponÃ­vel para este produto."
+                        detail="Nenhuma conta mae disponivel para este produto."
                     )
 
                 conta_mae_para_alocar_id = conta_mae.id
