@@ -1,4 +1,5 @@
 import uuid
+import datetime
 from decimal import Decimal
 from sqlmodel import SQLModel
 from app.models.base import TipoStatusPagamento # Importa nosso ENUM
@@ -20,6 +21,18 @@ class RecargaCreateResponse(SQLModel):
     valor_solicitado: Decimal
     pix_copia_e_cola: str # O código que o bot mostrará para o usuário
     pix_qr_code_base64: str # A imagem do QR Code que o bot mostrará
+    expiracao_minutos: int
+    expira_em: datetime.datetime
+
+# -----------------------------------------------------------------
+# Schema de RESPONSE (Status de uma recarga)
+# -----------------------------------------------------------------
+class RecargaStatusResponse(SQLModel):
+    recarga_id: uuid.UUID
+    status_pagamento: TipoStatusPagamento
+    expirado: bool
+    expiracao_minutos: int
+    expira_em: datetime.datetime
 
 # -----------------------------------------------------------------
 # Schema de REQUEST (O que o Gateway de Pagamento (simulado) nos envia)

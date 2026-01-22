@@ -21,6 +21,7 @@ from app.models.usuario_models import Usuario, RecargaSaldo
 from app.schemas.recarga_schemas import (
     RecargaCreateRequest, 
     RecargaCreateResponse,
+    RecargaStatusResponse,
     WebhookRecargaRequest,
     WebhookRecargaResponse
 )
@@ -36,6 +37,9 @@ webhook_router = APIRouter()
 
 # Router de recargas
 admin_router = APIRouter(dependencies=[Depends(get_current_admin_user)])
+
+def _calcular_expira_em(criado_em: datetime.datetime) -> datetime.datetime:
+    return criado_em + datetime.timedelta(minutes=settings.RECARGA_EXPIRACAO_MINUTOS)
 
 @admin_router.get("/", response_model=List[RecargaAdminRead])
 def get_admin_recargas(
@@ -77,6 +81,42 @@ def get_admin_recargas(
         
     return lista_recargas
 
+@router.get("/{recarga_id}", response_model=RecargaStatusResponse)
+def get_status_recarga(
+    *,
+    session: Session = Depends(get_session),
+    recarga_id: uuid.UUID
+):
+    """
+    [BOT] Consulta o status de uma recarga e expira se passou do prazo.
+    """
+    recarga = session.get(RecargaSaldo, recarga_id)
+    if not recarga:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recarga nao encontrada."
+        )
+
+    agora = datetime.datetime.utcnow()
+    expira_em = _calcular_expira_em(recarga.criado_em)
+    expirou = agora >= expira_em
+
+    if recarga.status_pagamento == TipoStatusPagamento.PENDENTE and expirou:
+        recarga.status_pagamento = TipoStatusPagamento.FALHOU
+        session.add(recarga)
+        session.commit()
+        session.refresh(recarga)
+
+    expirado = recarga.status_pagamento == TipoStatusPagamento.FALHOU and expirou
+
+    return RecargaStatusResponse(
+        recarga_id=recarga.id,
+        status_pagamento=recarga.status_pagamento,
+        expirado=expirado,
+        expiracao_minutos=settings.RECARGA_EXPIRACAO_MINUTOS,
+        expira_em=expira_em
+    )
+
 @router.post("/", response_model=RecargaCreateResponse)
 def create_pedido_de_recarga(
     *,
@@ -103,7 +143,22 @@ def create_pedido_de_recarga(
         telegram_id=recarga_in.telegram_id,
         nome_completo=recarga_in.nome_completo
     )
-    
+
+    # Expira recargas pendentes antigas do usuario
+    expiracao_limite = datetime.datetime.utcnow() - datetime.timedelta(
+        minutes=settings.RECARGA_EXPIRACAO_MINUTOS
+    )
+    recargas_expiradas = session.exec(
+        select(RecargaSaldo).where(
+            RecargaSaldo.usuario_id == usuario.id,
+            RecargaSaldo.status_pagamento == TipoStatusPagamento.PENDENTE,
+            RecargaSaldo.criado_em <= expiracao_limite
+        )
+    ).all()
+    for recarga in recargas_expiradas:
+        recarga.status_pagamento = TipoStatusPagamento.FALHOU
+        session.add(recarga)
+
     # Aplica o bônus de cashback pendente, se houver
     bonus_percent_aplicado = None
     if usuario.pending_cashback_percent:
@@ -168,12 +223,15 @@ def create_pedido_de_recarga(
     session.refresh(nova_recarga)
     
     # 5. Retorna os dados do PIX para o bot
+    expira_em = _calcular_expira_em(nova_recarga.criado_em)
     return RecargaCreateResponse(
         recarga_id=nova_recarga.id,
         status_pagamento=nova_recarga.status_pagamento,
         valor_solicitado=nova_recarga.valor_solicitado,
         pix_copia_e_cola=pix_copia_e_cola_real,
-        pix_qr_code_base64=f"data:image/png;base64,{pix_qr_code_base64_real}"
+        pix_qr_code_base64=f"data:image/png;base64,{pix_qr_code_base64_real}",
+        expiracao_minutos=settings.RECARGA_EXPIRACAO_MINUTOS,
+        expira_em=expira_em
     )
 
 # --- 4. ENDPOINT NOVO (WEBHOOK DE CONFIRMAÇÃO) ---

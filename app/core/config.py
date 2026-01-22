@@ -22,6 +22,9 @@ class Settings(BaseSettings):
 
     TELEGRAM_BOT_TOKEN: str
 
+    # Tempo máximo (em minutos) para uma recarga PIX ficar pendente
+    RECARGA_EXPIRACAO_MINUTOS: int = 30
+
     # Configuração para dizer ao Pydantic para ler do arquivo .env
     model_config = SettingsConfigDict(env_file=".env")
 
