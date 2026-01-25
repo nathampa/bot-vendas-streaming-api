@@ -181,7 +181,7 @@ def create_pedido_de_recarga(
             "email": f"user_{usuario.telegram_id}@ferreirastreamings.com", # Email fictício, mas obrigatório
             "first_name": usuario.nome_completo,
         },
-        "notification_url": "http://35.222.225.107/api/v1/webhook/recarga",
+        "notification_url": "http://api.ferreirastreamings.com.br/api/v1/webhook/recarga",
     }
 
     try:
