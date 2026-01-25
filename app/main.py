@@ -66,8 +66,10 @@ origins = [
     "http://localhost:3000", 
     "http://127.0.0.1:3001", 
     "http://177.11.152.132:3001",
-    "35.222.225.107:3001",
-    "35.222.225.107"
+    "http://painel.ferreirastreamings.com.br",
+    "http://api.ferreirastreamings.com.br",
+    "http://35.222.225.107:3001",
+    "http://35.222.225.107"
 ]
 
 app.add_middleware(
