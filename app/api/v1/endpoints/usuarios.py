@@ -1,9 +1,20 @@
+import datetime
+import uuid
+from decimal import Decimal, ROUND_HALF_UP
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
 from typing import Optional
 from app.db.database import get_session
 from app.models.usuario_models import Usuario
-from app.schemas.usuario_schemas import (UsuarioRegisterRequest, UsuarioRead, UsuarioPedidoRead,UsuarioAdminRead, RecargaAdminRead)
+from app.schemas.usuario_schemas import (
+    UsuarioRegisterRequest,
+    UsuarioRead,
+    UsuarioPedidoRead,
+    UsuarioAdminRead,
+    RecargaAdminRead,
+    UsuarioSaldoAjusteRequest,
+    UsuarioSaldoAjusteResponse,
+)
 from app.api.v1.deps import get_bot_api_key
 from typing import List
 from app.models.pedido_models import Pedido
@@ -63,6 +74,7 @@ def get_or_create_usuario(session: Session, telegram_id: int, nome_completo: str
 # --- Fim da Função Auxiliar ---
 
 admin_router = APIRouter(dependencies=[Depends(get_current_admin_user)])
+TWO_DECIMAL_PLACES = Decimal("0.01")
 
 @admin_router.get("/", response_model=List[UsuarioAdminRead])
 def get_admin_usuarios(
@@ -102,6 +114,71 @@ def get_admin_usuarios(
     ]
     
     return lista_usuarios
+
+
+@admin_router.post("/{usuario_id}/ajuste-saldo", response_model=UsuarioSaldoAjusteResponse)
+def ajustar_saldo_usuario(
+    *,
+    usuario_id: uuid.UUID,
+    ajuste: UsuarioSaldoAjusteRequest,
+    session: Session = Depends(get_session),
+):
+    """
+    [ADMIN] Ajusta manualmente o saldo da carteira do usuário.
+    Operações:
+    - ADICIONAR: soma o valor informado ao saldo atual
+    - REMOVER: subtrai o valor informado do saldo atual
+    - DEFINIR: define o saldo exatamente para o valor informado
+    """
+    usuario = session.exec(
+        select(Usuario).where(Usuario.id == usuario_id, Usuario.is_admin == False)
+    ).first()
+
+    if not usuario:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado.")
+
+    valor_ajuste = ajuste.valor.quantize(TWO_DECIMAL_PLACES, rounding=ROUND_HALF_UP)
+    saldo_anterior = Decimal(usuario.saldo_carteira).quantize(TWO_DECIMAL_PLACES, rounding=ROUND_HALF_UP)
+
+    if ajuste.operacao in ("ADICIONAR", "REMOVER") and valor_ajuste <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="O valor do ajuste precisa ser maior que zero para adicionar ou remover saldo.",
+        )
+
+    if ajuste.operacao == "DEFINIR" and valor_ajuste < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Não é permitido definir saldo negativo.",
+        )
+
+    if ajuste.operacao == "ADICIONAR":
+        saldo_atual = saldo_anterior + valor_ajuste
+    elif ajuste.operacao == "REMOVER":
+        if valor_ajuste > saldo_anterior:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Saldo insuficiente para remoção. Saldo atual: R$ {saldo_anterior:.2f}",
+            )
+        saldo_atual = saldo_anterior - valor_ajuste
+    else:
+        saldo_atual = valor_ajuste
+
+    saldo_atual = saldo_atual.quantize(TWO_DECIMAL_PLACES, rounding=ROUND_HALF_UP)
+    usuario.saldo_carteira = saldo_atual
+    session.add(usuario)
+    session.commit()
+
+    motivo = ajuste.motivo.strip() if ajuste.motivo and ajuste.motivo.strip() else None
+    return UsuarioSaldoAjusteResponse(
+        usuario_id=usuario.id,
+        operacao=ajuste.operacao,
+        valor=valor_ajuste,
+        saldo_anterior=saldo_anterior,
+        saldo_atual=saldo_atual,
+        motivo=motivo,
+        ajustado_em=datetime.datetime.utcnow(),
+    )
 
 # --- Endpoint Novo (/start vai chamar este) ---
 @router.post("/register", response_model=UsuarioRead)

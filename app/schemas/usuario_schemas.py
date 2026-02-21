@@ -1,7 +1,7 @@
 import uuid
 from decimal import Decimal
 from sqlmodel import SQLModel
-from typing import Optional
+from typing import Optional, Literal
 import datetime
 from app.models.base import TipoStatusPagamento
 
@@ -40,6 +40,20 @@ class UsuarioAdminRead(SQLModel):
     saldo_carteira: Decimal
     criado_em: datetime.datetime
     total_pedidos: int = 0
+
+class UsuarioSaldoAjusteRequest(SQLModel):
+    operacao: Literal["ADICIONAR", "REMOVER", "DEFINIR"]
+    valor: Decimal
+    motivo: Optional[str] = None
+
+class UsuarioSaldoAjusteResponse(SQLModel):
+    usuario_id: uuid.UUID
+    operacao: Literal["ADICIONAR", "REMOVER", "DEFINIR"]
+    valor: Decimal
+    saldo_anterior: Decimal
+    saldo_atual: Decimal
+    motivo: Optional[str] = None
+    ajustado_em: datetime.datetime
 
 # Schema para a lista de recargas no painel
 class RecargaAdminRead(SQLModel):
