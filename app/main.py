@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List, TYPE_CHECKING
 
 from app.models.base import *
-from app.models.usuario_models import Usuario, RecargaSaldo, SugestaoStreaming
+from app.models.usuario_models import Usuario, RecargaSaldo, SugestaoStreaming, AjusteSaldoUsuario
 from app.models.produto_models import Produto, EstoqueConta
 from app.models.conta_mae_models import ContaMae, ContaMaeConvite
 from app.models.pedido_models import Pedido
@@ -24,6 +24,7 @@ from app.schemas.conta_mae_schemas import (
 print("Reconstruindo modelos e schemas SQLModel...")
 Usuario.model_rebuild()
 RecargaSaldo.model_rebuild()
+AjusteSaldoUsuario.model_rebuild()
 SugestaoStreaming.model_rebuild()
 Produto.model_rebuild()
 EstoqueConta.model_rebuild()

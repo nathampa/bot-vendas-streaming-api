@@ -5,7 +5,7 @@ from typing import Optional, List, TYPE_CHECKING
 from sqlmodel import Field, SQLModel, Relationship
 import sqlalchemy as sa
 
-from app.models.base import TipoStatusPagamento
+from app.models.base import TipoStatusPagamento, TipoOperacaoAjusteSaldo
 
 # Bloco de importação para evitar erros de importação circular
 if TYPE_CHECKING:
@@ -37,6 +37,14 @@ class Usuario(SQLModel, table=True):
     pedidos: List["Pedido"] = Relationship(back_populates="usuario")
     tickets: List["TicketSuporte"] = Relationship(back_populates="usuario")
     sugestoes: List["SugestaoStreaming"] = Relationship(back_populates="usuario")
+    ajustes_saldo: List["AjusteSaldoUsuario"] = Relationship(
+        back_populates="usuario",
+        sa_relationship_kwargs={"foreign_keys": "[AjusteSaldoUsuario.usuario_id]"}
+    )
+    ajustes_realizados: List["AjusteSaldoUsuario"] = Relationship(
+        back_populates="admin",
+        sa_relationship_kwargs={"foreign_keys": "[AjusteSaldoUsuario.admin_id]"}
+    )
 
     # Relacionamentos de GiftCard (Corrigidos)
     gift_cards_resgatados: List["GiftCard"] = Relationship(
@@ -79,6 +87,28 @@ class RecargaSaldo(SQLModel, table=True):
 
     usuario_id: uuid.UUID = Field(foreign_key="usuario.id", nullable=False)
     usuario: Usuario = Relationship(back_populates="recargas")
+
+
+class AjusteSaldoUsuario(SQLModel, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    operacao: TipoOperacaoAjusteSaldo = Field(nullable=False)
+    valor: Decimal = Field(max_digits=10, decimal_places=2, nullable=False)
+    saldo_anterior: Decimal = Field(max_digits=10, decimal_places=2, nullable=False)
+    saldo_atual: Decimal = Field(max_digits=10, decimal_places=2, nullable=False)
+    motivo: Optional[str] = Field(default=None, max_length=240)
+    criado_em: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)
+
+    usuario_id: uuid.UUID = Field(foreign_key="usuario.id", nullable=False, index=True)
+    admin_id: uuid.UUID = Field(foreign_key="usuario.id", nullable=False, index=True)
+
+    usuario: Usuario = Relationship(
+        back_populates="ajustes_saldo",
+        sa_relationship_kwargs={"foreign_keys": "[AjusteSaldoUsuario.usuario_id]"}
+    )
+    admin: Usuario = Relationship(
+        back_populates="ajustes_realizados",
+        sa_relationship_kwargs={"foreign_keys": "[AjusteSaldoUsuario.admin_id]"}
+    )
 
 # --- Tabela: sugestoes_streaming ---
 class SugestaoStreaming(SQLModel, table=True):

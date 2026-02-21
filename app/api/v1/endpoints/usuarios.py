@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
 from typing import Optional
 from app.db.database import get_session
-from app.models.usuario_models import Usuario
+from app.models.usuario_models import Usuario, AjusteSaldoUsuario
 from app.schemas.usuario_schemas import (
     UsuarioRegisterRequest,
     UsuarioRead,
@@ -14,13 +14,14 @@ from app.schemas.usuario_schemas import (
     RecargaAdminRead,
     UsuarioSaldoAjusteRequest,
     UsuarioSaldoAjusteResponse,
+    UsuarioSaldoHistoricoRead,
 )
 from app.api.v1.deps import get_bot_api_key
 from typing import List
 from app.models.pedido_models import Pedido
 from app.models.produto_models import Produto
 from app.api.v1.deps import get_current_admin_user
-from sqlalchemy import func
+from sqlalchemy import func, desc
 
 # Roteador para o Bot (protegido pela API Key)
 router = APIRouter(dependencies=[Depends(get_bot_api_key)])
@@ -122,6 +123,7 @@ def ajustar_saldo_usuario(
     usuario_id: uuid.UUID,
     ajuste: UsuarioSaldoAjusteRequest,
     session: Session = Depends(get_session),
+    current_admin: Usuario = Depends(get_current_admin_user),
 ):
     """
     [ADMIN] Ajusta manualmente o saldo da carteira do usuário.
@@ -166,10 +168,21 @@ def ajustar_saldo_usuario(
 
     saldo_atual = saldo_atual.quantize(TWO_DECIMAL_PLACES, rounding=ROUND_HALF_UP)
     usuario.saldo_carteira = saldo_atual
+    motivo = ajuste.motivo.strip() if ajuste.motivo and ajuste.motivo.strip() else None
+
+    historico = AjusteSaldoUsuario(
+        operacao=ajuste.operacao,
+        valor=valor_ajuste,
+        saldo_anterior=saldo_anterior,
+        saldo_atual=saldo_atual,
+        motivo=motivo,
+        usuario_id=usuario.id,
+        admin_id=current_admin.id,
+    )
     session.add(usuario)
+    session.add(historico)
     session.commit()
 
-    motivo = ajuste.motivo.strip() if ajuste.motivo and ajuste.motivo.strip() else None
     return UsuarioSaldoAjusteResponse(
         usuario_id=usuario.id,
         operacao=ajuste.operacao,
@@ -179,6 +192,64 @@ def ajustar_saldo_usuario(
         motivo=motivo,
         ajustado_em=datetime.datetime.utcnow(),
     )
+
+
+@admin_router.get("/{usuario_id}/historico-saldo", response_model=List[UsuarioSaldoHistoricoRead])
+def get_historico_ajustes_saldo_usuario(
+    *,
+    usuario_id: uuid.UUID,
+    limite: int = 20,
+    session: Session = Depends(get_session),
+):
+    """
+    [ADMIN] Retorna histórico de ajustes manuais de saldo de um usuário.
+    """
+    if limite < 1:
+        raise HTTPException(status_code=400, detail="O limite precisa ser maior ou igual a 1.")
+    if limite > 200:
+        raise HTTPException(status_code=400, detail="O limite máximo permitido é 200.")
+
+    usuario = session.exec(
+        select(Usuario).where(Usuario.id == usuario_id, Usuario.is_admin == False)
+    ).first()
+    if not usuario:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado.")
+
+    stmt = (
+        select(
+            AjusteSaldoUsuario.id,
+            AjusteSaldoUsuario.operacao,
+            AjusteSaldoUsuario.valor,
+            AjusteSaldoUsuario.saldo_anterior,
+            AjusteSaldoUsuario.saldo_atual,
+            AjusteSaldoUsuario.motivo,
+            AjusteSaldoUsuario.criado_em,
+            AjusteSaldoUsuario.admin_id,
+            Usuario.nome_completo.label("admin_nome_completo"),
+            Usuario.telegram_id.label("admin_telegram_id"),
+        )
+        .join(Usuario, Usuario.id == AjusteSaldoUsuario.admin_id)
+        .where(AjusteSaldoUsuario.usuario_id == usuario_id)
+        .order_by(desc(AjusteSaldoUsuario.criado_em))
+        .limit(limite)
+    )
+
+    resultados = session.exec(stmt).all()
+    return [
+        UsuarioSaldoHistoricoRead(
+            id=item.id,
+            operacao=item.operacao,
+            valor=item.valor,
+            saldo_anterior=item.saldo_anterior,
+            saldo_atual=item.saldo_atual,
+            motivo=item.motivo,
+            criado_em=item.criado_em,
+            admin_id=item.admin_id,
+            admin_nome_completo=item.admin_nome_completo,
+            admin_telegram_id=item.admin_telegram_id,
+        )
+        for item in resultados
+    ]
 
 # --- Endpoint Novo (/start vai chamar este) ---
 @router.post("/register", response_model=UsuarioRead)

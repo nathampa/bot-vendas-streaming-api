@@ -55,6 +55,18 @@ class UsuarioSaldoAjusteResponse(SQLModel):
     motivo: Optional[str] = None
     ajustado_em: datetime.datetime
 
+class UsuarioSaldoHistoricoRead(SQLModel):
+    id: uuid.UUID
+    operacao: Literal["ADICIONAR", "REMOVER", "DEFINIR"]
+    valor: Decimal
+    saldo_anterior: Decimal
+    saldo_atual: Decimal
+    motivo: Optional[str] = None
+    criado_em: datetime.datetime
+    admin_id: uuid.UUID
+    admin_nome_completo: str
+    admin_telegram_id: int
+
 # Schema para a lista de recargas no painel
 class RecargaAdminRead(SQLModel):
     id: uuid.UUID

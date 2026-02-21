@@ -37,3 +37,8 @@ class TipoEntregaProduto(str, enum.Enum):
 class StatusEntregaPedido(str, enum.Enum):
     ENTREGUE = "ENTREGUE"
     PENDENTE = "PENDENTE"
+
+class TipoOperacaoAjusteSaldo(str, enum.Enum):
+    ADICIONAR = "ADICIONAR"
+    REMOVER = "REMOVER"
+    DEFINIR = "DEFINIR"
