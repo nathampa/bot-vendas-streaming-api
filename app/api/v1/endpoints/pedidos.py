@@ -20,6 +20,10 @@ from app.schemas.pedido_schemas import (
 from app.api.v1.deps import get_current_admin_user
 from app.services import security
 from app.services.notification_service import send_telegram_message, escape_markdown_v2
+from app.services.disponibilidade_service import (
+    inativar_conta_estoque_se_lotada,
+    inativar_produto_sem_contas_disponiveis,
+)
 
 # Roteador de Admin para Pedidos
 router = APIRouter(dependencies=[Depends(get_current_admin_user)])
@@ -188,8 +192,10 @@ def entregar_pedido_manual(
             is_ativo=True,
             requer_atencao=False 
         )
+        inativar_conta_estoque_se_lotada(nova_conta)
         session.add(nova_conta)
         session.flush() # Força o DB a gerar o ID da nova_conta
+        inativar_produto_sem_contas_disponiveis(session, produto)
 
         # 5. Atualiza o Pedido
         pedido.estoque_conta_id = nova_conta.id

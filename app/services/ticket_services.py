@@ -13,6 +13,10 @@ from app.models.pedido_models import Pedido
 from app.models.produto_models import Produto, EstoqueConta
 from app.models.suporte_models import TicketSuporte
 from app.services.notification_service import send_telegram_message, escape_markdown_v2
+from app.services.disponibilidade_service import (
+    inativar_conta_estoque_se_lotada,
+    inativar_produto_sem_contas_disponiveis,
+)
 
 # --- Funções Auxiliares (Exatamente como eram antes) ---
 
@@ -96,7 +100,9 @@ def handle_trocar_conta(session: Session, ticket: TicketSuporte):
 
     # 3. Caso de Sucesso
     nova_conta.slots_ocupados += 1
+    inativar_conta_estoque_se_lotada(nova_conta)
     session.add(nova_conta)
+    inativar_produto_sem_contas_disponiveis(session, produto)
 
     pedido.estoque_conta_id = nova_conta.id
     session.add(pedido)

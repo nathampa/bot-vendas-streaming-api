@@ -19,6 +19,10 @@ from app.schemas.conta_mae_schemas import (
     ContaMaeConviteCreate,
 )
 from app.services import security
+from app.services.disponibilidade_service import (
+    inativar_conta_mae_se_lotada,
+    inativar_produto_sem_contas_disponiveis,
+)
 
 
 router = APIRouter(dependencies=[Depends(get_current_admin_user)])
@@ -173,7 +177,11 @@ def update_conta_mae(
         update_data["senha"] = security.encrypt_data(update_data["senha"])
 
     conta.sqlmodel_update(update_data)
+    inativar_conta_mae_se_lotada(conta)
     session.add(conta)
+    produto = session.get(Produto, conta.produto_id)
+    if produto:
+        inativar_produto_sem_contas_disponiveis(session, produto)
     session.commit()
     session.refresh(conta)
 
@@ -253,7 +261,11 @@ def add_convite_conta_mae(
         email_cliente=email_cliente,
     )
     conta.slots_ocupados += 1
+    inativar_conta_mae_se_lotada(conta)
     session.add(conta)
+    produto = session.get(Produto, conta.produto_id)
+    if produto:
+        inativar_produto_sem_contas_disponiveis(session, produto)
     session.add(convite)
     session.commit()
     session.refresh(convite)

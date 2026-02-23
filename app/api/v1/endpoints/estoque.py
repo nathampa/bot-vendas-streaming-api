@@ -15,6 +15,10 @@ from app.schemas.estoque_schemas import (
 )
 from app.api.v1.deps import get_current_admin_user # Nosso "Cadeado"
 from app.services import security # Nosso service de Criptografia
+from app.services.disponibilidade_service import (
+    inativar_conta_estoque_se_lotada,
+    inativar_produto_sem_contas_disponiveis,
+)
 
 # Roteador de Admin para o Estoque
 # Todos os endpoints aqui serão protegidos
@@ -146,8 +150,12 @@ def update_conta_estoque(
         
     # Atualiza o objeto do model
     conta.sqlmodel_update(update_data)
+    inativar_conta_estoque_se_lotada(conta)
     
     session.add(conta)
+    produto = session.get(Produto, conta.produto_id)
+    if produto:
+        inativar_produto_sem_contas_disponiveis(session, produto)
     session.commit()
     session.refresh(conta)
     return conta

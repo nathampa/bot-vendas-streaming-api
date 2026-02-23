@@ -12,6 +12,10 @@ from app.models.usuario_models import Usuario
 from app.models.pedido_models import Pedido
 from app.models.produto_models import Produto, EstoqueConta
 from app.models.suporte_models import TicketSuporte
+from app.services.disponibilidade_service import (
+    inativar_conta_estoque_se_lotada,
+    inativar_produto_sem_contas_disponiveis,
+)
 
 # --- Funções Auxiliares (Tarefas Reais) ---
 
@@ -81,7 +85,9 @@ def handle_trocar_conta(session: Session, ticket: TicketSuporte):
     # 3. Caso de Sucesso: Encontrámos uma nova conta
     # a. Alocar o slot na nova conta
     nova_conta.slots_ocupados += 1
+    inativar_conta_estoque_se_lotada(nova_conta)
     session.add(nova_conta)
+    inativar_produto_sem_contas_disponiveis(session, produto)
     
     # b. Reatribuir o pedido original à nova conta
     pedido.estoque_conta_id = nova_conta.id

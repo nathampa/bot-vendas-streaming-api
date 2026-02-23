@@ -13,6 +13,11 @@ from app.models.base import TipoEntregaProduto, StatusEntregaPedido
 from app.schemas.compra_schemas import CompraCreateRequest, CompraCreateResponse
 from app.api.v1.deps import get_current_admin_user 
 from app.services import security 
+from app.services.disponibilidade_service import (
+    inativar_conta_estoque_se_lotada,
+    inativar_conta_mae_se_lotada,
+    inativar_produto_sem_contas_disponiveis,
+)
 
 router = APIRouter()
 
@@ -87,7 +92,9 @@ def create_compra_com_saldo(
                 
                 # Aloca o slot e o ID
                 conta_alocada.slots_ocupados += 1
+                inativar_conta_estoque_se_lotada(conta_alocada)
                 session.add(conta_alocada)
+                inativar_produto_sem_contas_disponiveis(session, produto)
                 conta_para_alocar_id = conta_alocada.id # Salva o ID
                 
                 # Prepara a entrega
@@ -153,7 +160,9 @@ def create_compra_com_saldo(
 
                 conta_mae_para_alocar_id = conta_mae.id
                 conta_mae.slots_ocupados += 1
+                inativar_conta_mae_se_lotada(conta_mae)
                 session.add(conta_mae)
+                inativar_produto_sem_contas_disponiveis(session, produto)
                 login_entrega = None
                 senha_entrega = None
                 instrucao_customizada = produto.instrucoes_pos_compra or "A entrega é manual e pode levar alguns minutos."
