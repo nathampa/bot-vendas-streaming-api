@@ -31,6 +31,10 @@ class UsuarioPedidoRead(SQLModel):
     produto_nome: str
     valor_pago: Decimal
     data_compra: datetime.datetime
+    data_expiracao: Optional[datetime.date] = None
+    dias_restantes: Optional[int] = None
+    conta_expirada: bool = False
+    origem_expiracao: Optional[Literal["ESTOQUE", "CONTA_MAE"]] = None
 
 # Schema para a lista de usuários no painel
 class UsuarioAdminRead(SQLModel):

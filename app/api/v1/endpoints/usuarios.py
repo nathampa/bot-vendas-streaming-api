@@ -19,7 +19,8 @@ from app.schemas.usuario_schemas import (
 from app.api.v1.deps import get_bot_api_key
 from typing import List
 from app.models.pedido_models import Pedido
-from app.models.produto_models import Produto
+from app.models.produto_models import Produto, EstoqueConta
+from app.models.conta_mae_models import ContaMae, ContaMaeConvite
 from app.api.v1.deps import get_current_admin_user
 from sqlalchemy import func, desc
 
@@ -295,7 +296,10 @@ def get_meus_pedidos(
             Pedido.id,
             Produto.nome,
             Pedido.valor_pago,
-            Pedido.criado_em
+            Pedido.criado_em,
+            Pedido.email_cliente,
+            Pedido.estoque_conta_id,
+            Pedido.conta_mae_id,
         )
         .join(Produto, Produto.id == Pedido.produto_id)
         .where(Pedido.usuario_id == usuario.id)
@@ -306,14 +310,63 @@ def get_meus_pedidos(
     resultados = session.exec(stmt).all()
 
     # 3. Formata a resposta no schema
-    lista_pedidos = [
-        UsuarioPedidoRead(
-            pedido_id=pid,
-            produto_nome=pnome,
-            valor_pago=vpago,
-            data_compra=data
-        ) for pid, pnome, vpago, data in resultados
-    ]
+    today = datetime.date.today()
+    lista_pedidos: List[UsuarioPedidoRead] = []
+
+    for (
+        pid,
+        pnome,
+        vpago,
+        data,
+        email_cliente,
+        estoque_conta_id,
+        conta_mae_id,
+    ) in resultados:
+        data_expiracao = None
+        origem_expiracao = None
+
+        # Regra especial: pedidos com conta-mãe usam a data da conta-mãe
+        # vinculada ao convite (email do usuário).
+        stmt_convite = select(ContaMaeConvite).where(ContaMaeConvite.pedido_id == pid)
+        if email_cliente:
+            stmt_convite = stmt_convite.where(ContaMaeConvite.email_cliente == email_cliente)
+        convite = session.exec(stmt_convite.limit(1)).first()
+
+        if convite:
+            conta_mae = session.get(ContaMae, convite.conta_mae_id)
+            if conta_mae and conta_mae.data_expiracao:
+                data_expiracao = conta_mae.data_expiracao
+                origem_expiracao = "CONTA_MAE"
+        elif conta_mae_id and email_cliente:
+            conta_mae = session.get(ContaMae, conta_mae_id)
+            if conta_mae and conta_mae.data_expiracao:
+                data_expiracao = conta_mae.data_expiracao
+                origem_expiracao = "CONTA_MAE"
+
+        if not data_expiracao and estoque_conta_id:
+            conta_estoque = session.get(EstoqueConta, estoque_conta_id)
+            if conta_estoque and conta_estoque.data_expiracao:
+                data_expiracao = conta_estoque.data_expiracao
+                origem_expiracao = "ESTOQUE"
+
+        dias_restantes = None
+        conta_expirada = False
+        if data_expiracao:
+            dias_restantes = (data_expiracao - today).days
+            conta_expirada = dias_restantes < 0
+
+        lista_pedidos.append(
+            UsuarioPedidoRead(
+                pedido_id=pid,
+                produto_nome=pnome,
+                valor_pago=vpago,
+                data_compra=data,
+                data_expiracao=data_expiracao,
+                dias_restantes=dias_restantes,
+                conta_expirada=conta_expirada,
+                origem_expiracao=origem_expiracao,
+            )
+        )
 
     return lista_pedidos
 
