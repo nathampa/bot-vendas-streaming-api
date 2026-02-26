@@ -19,6 +19,7 @@ class Pedido(SQLModel, table=True):
     valor_pago: Decimal = Field(max_digits=10, decimal_places=2, nullable=False)
     criado_em: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)
     email_cliente: Optional[str] = Field(default=None, nullable=True, index=True)
+    ultima_data_expiracao_notificada: Optional[datetime.date] = Field(default=None, nullable=True)
     status_entrega: StatusEntregaPedido = Field(
         default=StatusEntregaPedido.ENTREGUE, 
         nullable=False

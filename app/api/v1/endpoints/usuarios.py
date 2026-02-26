@@ -10,6 +10,8 @@ from app.schemas.usuario_schemas import (
     UsuarioRegisterRequest,
     UsuarioRead,
     UsuarioPedidoRead,
+    UsuarioExpiracaoPendenteRead,
+    UsuarioExpiracaoMarcarNotificadaRequest,
     UsuarioAdminRead,
     RecargaAdminRead,
     UsuarioSaldoAjusteRequest,
@@ -19,10 +21,11 @@ from app.schemas.usuario_schemas import (
 from app.api.v1.deps import get_bot_api_key
 from typing import List
 from app.models.pedido_models import Pedido
-from app.models.produto_models import Produto, EstoqueConta
-from app.models.conta_mae_models import ContaMae, ContaMaeConvite
+from app.models.produto_models import Produto
+from app.models.base import StatusEntregaPedido
 from app.api.v1.deps import get_current_admin_user
 from sqlalchemy import func, desc
+from app.services.pedido_expiracao_service import resolver_data_expiracao_pedido
 
 # Roteador para o Bot (protegido pela API Key)
 router = APIRouter(dependencies=[Depends(get_bot_api_key)])
@@ -322,32 +325,13 @@ def get_meus_pedidos(
         estoque_conta_id,
         conta_mae_id,
     ) in resultados:
-        data_expiracao = None
-        origem_expiracao = None
-
-        # Regra especial: pedidos com conta-mãe usam a data da conta-mãe
-        # vinculada ao convite (email do usuário).
-        stmt_convite = select(ContaMaeConvite).where(ContaMaeConvite.pedido_id == pid)
-        if email_cliente:
-            stmt_convite = stmt_convite.where(ContaMaeConvite.email_cliente == email_cliente)
-        convite = session.exec(stmt_convite.limit(1)).first()
-
-        if convite:
-            conta_mae = session.get(ContaMae, convite.conta_mae_id)
-            if conta_mae and conta_mae.data_expiracao:
-                data_expiracao = conta_mae.data_expiracao
-                origem_expiracao = "CONTA_MAE"
-        elif conta_mae_id and email_cliente:
-            conta_mae = session.get(ContaMae, conta_mae_id)
-            if conta_mae and conta_mae.data_expiracao:
-                data_expiracao = conta_mae.data_expiracao
-                origem_expiracao = "CONTA_MAE"
-
-        if not data_expiracao and estoque_conta_id:
-            conta_estoque = session.get(EstoqueConta, estoque_conta_id)
-            if conta_estoque and conta_estoque.data_expiracao:
-                data_expiracao = conta_estoque.data_expiracao
-                origem_expiracao = "ESTOQUE"
+        data_expiracao, origem_expiracao = resolver_data_expiracao_pedido(
+            session=session,
+            pedido_id=pid,
+            email_cliente=email_cliente,
+            estoque_conta_id=estoque_conta_id,
+            conta_mae_id=conta_mae_id,
+        )
 
         dias_restantes = None
         conta_expirada = False
@@ -369,6 +353,116 @@ def get_meus_pedidos(
         )
 
     return lista_pedidos
+
+
+@router.get("/expiracoes-pendentes", response_model=List[UsuarioExpiracaoPendenteRead])
+def get_expiracoes_pendentes(
+    *,
+    session: Session = Depends(get_session),
+    limite: int = 200,
+):
+    """
+    [BOT] Lista pedidos cuja conta expira hoje e ainda não tiveram notificação enviada.
+    """
+    if limite < 1:
+        raise HTTPException(status_code=400, detail="O limite precisa ser maior ou igual a 1.")
+    if limite > 1000:
+        raise HTTPException(status_code=400, detail="O limite máximo permitido é 1000.")
+
+    hoje = datetime.date.today()
+
+    stmt = (
+        select(
+            Pedido.id,
+            Usuario.telegram_id,
+            Produto.nome,
+            Pedido.email_cliente,
+            Pedido.estoque_conta_id,
+            Pedido.conta_mae_id,
+            Pedido.ultima_data_expiracao_notificada,
+        )
+        .join(Usuario, Usuario.id == Pedido.usuario_id)
+        .join(Produto, Produto.id == Pedido.produto_id)
+        .where(Pedido.status_entrega == StatusEntregaPedido.ENTREGUE)
+        .order_by(Pedido.criado_em.desc())
+        .limit(2000)
+    )
+
+    resultados = session.exec(stmt).all()
+
+    pendentes: List[UsuarioExpiracaoPendenteRead] = []
+    for (
+        pedido_id,
+        telegram_id,
+        produto_nome,
+        email_cliente,
+        estoque_conta_id,
+        conta_mae_id,
+        ultima_data_notificada,
+    ) in resultados:
+        data_expiracao, origem_expiracao = resolver_data_expiracao_pedido(
+            session=session,
+            pedido_id=pedido_id,
+            email_cliente=email_cliente,
+            estoque_conta_id=estoque_conta_id,
+            conta_mae_id=conta_mae_id,
+        )
+
+        if not data_expiracao or not origem_expiracao:
+            continue
+        if data_expiracao != hoje:
+            continue
+        if ultima_data_notificada == data_expiracao:
+            continue
+
+        pendentes.append(
+            UsuarioExpiracaoPendenteRead(
+                pedido_id=pedido_id,
+                telegram_id=telegram_id,
+                produto_nome=produto_nome,
+                data_expiracao=data_expiracao,
+                origem_expiracao=origem_expiracao,
+            )
+        )
+
+        if len(pendentes) >= limite:
+            break
+
+    return pendentes
+
+
+@router.post("/expiracoes-pendentes/marcar-notificada")
+def marcar_expiracao_notificada(
+    *,
+    session: Session = Depends(get_session),
+    payload: UsuarioExpiracaoMarcarNotificadaRequest,
+):
+    """
+    [BOT] Marca que a notificação de expiração de um pedido foi enviada para uma data específica.
+    """
+    pedido = session.get(Pedido, payload.pedido_id)
+    if not pedido:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
+
+    data_expiracao_atual, _ = resolver_data_expiracao_pedido(
+        session=session,
+        pedido_id=pedido.id,
+        email_cliente=pedido.email_cliente,
+        estoque_conta_id=pedido.estoque_conta_id,
+        conta_mae_id=pedido.conta_mae_id,
+    )
+
+    if data_expiracao_atual != payload.data_expiracao:
+        raise HTTPException(
+            status_code=409,
+            detail="Data de expiração atual do pedido não corresponde à data informada.",
+        )
+
+    pedido.ultima_data_expiracao_notificada = payload.data_expiracao
+    session.add(pedido)
+    session.commit()
+
+    return {"status": "ok", "pedido_id": pedido.id, "data_expiracao": payload.data_expiracao}
 
 # Endpoint buscar id de todo os usuarios
 @router.get(

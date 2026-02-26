@@ -36,6 +36,19 @@ class UsuarioPedidoRead(SQLModel):
     conta_expirada: bool = False
     origem_expiracao: Optional[Literal["ESTOQUE", "CONTA_MAE"]] = None
 
+
+class UsuarioExpiracaoPendenteRead(SQLModel):
+    pedido_id: uuid.UUID
+    telegram_id: int
+    produto_nome: str
+    data_expiracao: datetime.date
+    origem_expiracao: Literal["ESTOQUE", "CONTA_MAE"]
+
+
+class UsuarioExpiracaoMarcarNotificadaRequest(SQLModel):
+    pedido_id: uuid.UUID
+    data_expiracao: datetime.date
+
 # Schema para a lista de usuários no painel
 class UsuarioAdminRead(SQLModel):
     id: uuid.UUID
