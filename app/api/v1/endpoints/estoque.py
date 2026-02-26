@@ -17,7 +17,7 @@ from app.api.v1.deps import get_current_admin_user # Nosso "Cadeado"
 from app.services import security # Nosso service de Criptografia
 from app.services.disponibilidade_service import (
     inativar_conta_estoque_se_lotada,
-    inativar_produto_sem_contas_disponiveis,
+    sincronizar_status_produto_por_disponibilidade,
 )
 
 # Roteador de Admin para o Estoque
@@ -58,6 +58,7 @@ def create_conta_estoque(
     )
     
     session.add(estoque)
+    sincronizar_status_produto_por_disponibilidade(session, produto)
     session.commit()
     session.refresh(estoque)
     return estoque
@@ -155,7 +156,7 @@ def update_conta_estoque(
     session.add(conta)
     produto = session.get(Produto, conta.produto_id)
     if produto:
-        inativar_produto_sem_contas_disponiveis(session, produto)
+        sincronizar_status_produto_por_disponibilidade(session, produto)
     session.commit()
     session.refresh(conta)
     return conta

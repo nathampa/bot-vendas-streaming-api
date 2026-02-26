@@ -21,7 +21,7 @@ from app.schemas.conta_mae_schemas import (
 from app.services import security
 from app.services.disponibilidade_service import (
     inativar_conta_mae_se_lotada,
-    inativar_produto_sem_contas_disponiveis,
+    sincronizar_status_produto_por_disponibilidade,
 )
 
 
@@ -50,6 +50,7 @@ def create_conta_mae(
         is_ativo=conta_in.is_ativo,
     )
     session.add(conta)
+    sincronizar_status_produto_por_disponibilidade(session, produto)
     session.commit()
     session.refresh(conta)
 
@@ -181,7 +182,7 @@ def update_conta_mae(
     session.add(conta)
     produto = session.get(Produto, conta.produto_id)
     if produto:
-        inativar_produto_sem_contas_disponiveis(session, produto)
+        sincronizar_status_produto_por_disponibilidade(session, produto)
     session.commit()
     session.refresh(conta)
 
@@ -265,7 +266,7 @@ def add_convite_conta_mae(
     session.add(conta)
     produto = session.get(Produto, conta.produto_id)
     if produto:
-        inativar_produto_sem_contas_disponiveis(session, produto)
+        sincronizar_status_produto_por_disponibilidade(session, produto)
     session.add(convite)
     session.commit()
     session.refresh(convite)

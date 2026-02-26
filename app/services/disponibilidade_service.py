@@ -48,6 +48,30 @@ def inativar_produto_sem_contas_disponiveis(
     return False
 
 
+def sincronizar_status_produto_por_disponibilidade(
+    session: Session,
+    produto: Produto,
+) -> bool:
+    """
+    Sincroniza o status do produto com a disponibilidade atual:
+    - Reativa quando houver conta ativa com slot disponível.
+    - Inativa quando não houver.
+    """
+    disponivel = _produto_tem_disponibilidade(session, produto)
+
+    if disponivel and not produto.is_ativo:
+        produto.is_ativo = True
+        session.add(produto)
+        return True
+
+    if not disponivel and produto.is_ativo:
+        produto.is_ativo = False
+        session.add(produto)
+        return True
+
+    return False
+
+
 def _produto_tem_disponibilidade(session: Session, produto: Produto) -> bool:
     if produto.tipo_entrega == TipoEntregaProduto.AUTOMATICA:
         conta_disponivel_id: Optional[str] = session.exec(
