@@ -8,7 +8,8 @@ from app.db.database import get_session
 from app.models.usuario_models import Usuario
 from app.models.pedido_models import Pedido
 from app.models.produto_models import Produto, EstoqueConta
-from app.models.conta_mae_models import ContaMae
+from app.models.conta_mae_models import ContaMae, ContaMaeConvite
+from app.models.suporte_models import TicketSuporte
 from app.models.base import StatusEntregaPedido
 from app.schemas.pedido_schemas import (
     PedidoAdminList,
@@ -143,6 +144,46 @@ def get_pedido_detalhes(
     )
     
     return detalhes_pedido
+
+
+@router.delete("/{pedido_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_admin_pedido(
+    *,
+    session: Session = Depends(get_session),
+    pedido_id: uuid.UUID
+):
+    """
+    [ADMIN] Exclui um pedido do histórico administrativo.
+    Remove ticket vinculado e desvincula convites de conta mãe associados ao pedido.
+    """
+    pedido = session.get(Pedido, pedido_id)
+    if not pedido:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
+
+    try:
+        ticket = session.exec(
+            select(TicketSuporte).where(TicketSuporte.pedido_id == pedido_id)
+        ).first()
+        if ticket:
+            session.delete(ticket)
+
+        convites = session.exec(
+            select(ContaMaeConvite).where(ContaMaeConvite.pedido_id == pedido_id)
+        ).all()
+        for convite in convites:
+            convite.pedido_id = None
+            session.add(convite)
+
+        session.delete(pedido)
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao excluir pedido: {e}"
+        )
+
+    return
 
 # Entrega pedido manual
 @router.post("/{pedido_id}/entregar", response_model=PedidoAdminDetails)

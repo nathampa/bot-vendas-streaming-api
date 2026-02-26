@@ -69,18 +69,24 @@ def create_conta_mae(
         data_expiracao=conta.data_expiracao,
         dias_restantes=dias_restantes,
         total_convites=0,
+        emails_vinculados=[],
     )
 
 
 @router.get("/", response_model=List[ContaMaeAdminRead])
 def get_contas_mae(session: Session = Depends(get_session)):
     contas = session.exec(select(ContaMae)).all()
-
-    counts = session.exec(
-        select(ContaMaeConvite.conta_mae_id, func.count(ContaMaeConvite.id))
-        .group_by(ContaMaeConvite.conta_mae_id)
+    convite_rows = session.exec(
+        select(ContaMaeConvite.conta_mae_id, ContaMaeConvite.email_cliente)
     ).all()
-    counts_map = {conta_id: total for conta_id, total in counts}
+    counts_map: dict[uuid.UUID, int] = {}
+    emails_map: dict[uuid.UUID, set[str]] = {}
+    for conta_mae_id, email_cliente in convite_rows:
+        counts_map[conta_mae_id] = counts_map.get(conta_mae_id, 0) + 1
+        if email_cliente:
+            if conta_mae_id not in emails_map:
+                emails_map[conta_mae_id] = set()
+            emails_map[conta_mae_id].add(email_cliente)
 
     today = datetime.date.today()
     response: List[ContaMaeAdminRead] = []
@@ -100,6 +106,7 @@ def get_contas_mae(session: Session = Depends(get_session)):
                 data_expiracao=conta.data_expiracao,
                 dias_restantes=dias_restantes,
                 total_convites=counts_map.get(conta.id, 0),
+                emails_vinculados=sorted(list(emails_map.get(conta.id, set()))),
             )
         )
 
@@ -149,6 +156,7 @@ def get_conta_mae(
         data_expiracao=conta.data_expiracao,
         dias_restantes=dias_restantes,
         total_convites=len(convites),
+        emails_vinculados=sorted(list({convite.email_cliente for convite in convites if convite.email_cliente})),
         senha=senha_descriptografada,
         convites=convites,
     )
@@ -205,6 +213,17 @@ def update_conta_mae(
         data_expiracao=conta.data_expiracao,
         dias_restantes=dias_restantes,
         total_convites=total_convites,
+        emails_vinculados=sorted(
+            list(
+                {
+                    email
+                    for email in session.exec(
+                        select(ContaMaeConvite.email_cliente).where(ContaMaeConvite.conta_mae_id == conta.id)
+                    ).all()
+                    if email
+                }
+            )
+        ),
     )
 
 

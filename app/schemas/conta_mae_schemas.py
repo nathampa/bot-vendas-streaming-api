@@ -1,7 +1,7 @@
 import uuid
 import datetime
 from typing import Optional, List
-from sqlmodel import SQLModel
+from sqlmodel import SQLModel, Field
 
 
 class ContaMaeCreate(SQLModel):
@@ -42,6 +42,7 @@ class ContaMaeAdminRead(SQLModel):
     data_expiracao: Optional[datetime.date] = None
     dias_restantes: Optional[int] = None
     total_convites: Optional[int] = None
+    emails_vinculados: List[str] = Field(default_factory=list)
 
 
 class ContaMaeAdminDetails(ContaMaeAdminRead):
