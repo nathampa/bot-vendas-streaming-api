@@ -17,6 +17,8 @@ from app.models.produto_models import *
 from app.models.pedido_models import *
 from app.models.suporte_models import *
 from app.models.configuracao_models import *
+from app.models.conta_mae_models import *
+from app.models.email_monitor_models import *
 
 from logging.config import fileConfig
 

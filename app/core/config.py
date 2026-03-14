@@ -1,39 +1,30 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 class Settings(BaseSettings):
     """
     Carrega e valida as variáveis de ambiente do arquivo .env
     """
-    
-    # URL de conexão com o banco de dados (lida do .env)
+
     DATABASE_URL: str
-    
-    # Chave secreta para assinar os tokens JWT (lida do .env)
     JWT_SECRET_KEY: str
-    
-    # Chave para criptografar as senhas (lida do .env)
     AES_ENCRYPTION_KEY: str
 
-    #CELERY_BROKER_URL: str
+    # CELERY_BROKER_URL: str
 
     BOT_API_KEY: str
-
     MERCADOPAGO_ACCESS_TOKEN: str
-
     TELEGRAM_BOT_TOKEN: str
 
-    # Tempo máximo (em minutos) para uma recarga PIX ficar pendente
+    IMAP_SYNC_WORKER_ENABLED: bool = True
+    IMAP_SYNC_INTERVAL_SECONDS: int = 300
+    EMAIL_MONITOR_MAX_BODY_CHARS: int = 20000
+    EMAIL_MONITOR_SYNC_BATCH_SIZE: int = 100
+    EMAIL_MONITOR_WEBHOOK_TIMEOUT_SECONDS: int = 5
+
     RECARGA_EXPIRACAO_MINUTOS: int = 30
 
-    # Configuração para dizer ao Pydantic para ler do arquivo .env
     model_config = SettingsConfigDict(env_file=".env")
 
-    
 
-
-# Criamos uma instância única que será importada em todo o projeto
 settings = Settings()
-
-# Se alguma variável (ex: DATABASE_URL) não for encontrada no .env,
-# o programa vai falhar AQUI na inicialização, o que é ótimo.
-# Isso nos avisa que o .env está configurado errado, antes de dar erro na API.
