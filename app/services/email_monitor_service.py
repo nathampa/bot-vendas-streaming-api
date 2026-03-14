@@ -887,6 +887,53 @@ def sync_active_accounts(trigger_source: str = "scheduler", force: bool = False)
     return results
 
 
+def delete_account_permanently(session: Session, account: EmailMonitorAccount) -> dict[str, int]:
+    lock = get_account_lock(account.id)
+    if not lock.acquire(blocking=False):
+        raise RuntimeError("A conta ja esta em sincronizacao e nao pode ser excluida agora.")
+
+    try:
+        messages = session.exec(select(EmailMonitorMessage).where(EmailMonitorMessage.account_id == account.id)).all()
+        rules = session.exec(select(EmailMonitorRule).where(EmailMonitorRule.account_id == account.id)).all()
+        folder_states = session.exec(select(EmailMonitorFolderState).where(EmailMonitorFolderState.account_id == account.id)).all()
+        sync_runs = session.exec(select(EmailMonitorSyncRun).where(EmailMonitorSyncRun.account_id == account.id)).all()
+        alerts = session.exec(select(EmailMonitorAlertEvent).where(EmailMonitorAlertEvent.account_id == account.id)).all()
+
+        for alert in alerts:
+            session.delete(alert)
+
+        for message in messages:
+            matches = session.exec(
+                select(EmailMonitorMessageMatch).where(EmailMonitorMessageMatch.message_id == message.id)
+            ).all()
+            for match in matches:
+                session.delete(match)
+            session.delete(message)
+
+        for sync_run in sync_runs:
+            session.delete(sync_run)
+
+        for folder_state in folder_states:
+            session.delete(folder_state)
+
+        for rule in rules:
+            session.delete(rule)
+
+        session.delete(account)
+
+        return {
+            "messages": len(messages),
+            "rules": len(rules),
+            "folder_states": len(folder_states),
+            "sync_runs": len(sync_runs),
+            "alerts": len(alerts),
+        }
+    finally:
+        lock.release()
+        with _SYNC_REGISTRY_LOCK:
+            _SYNC_LOCKS.pop(str(account.id), None)
+
+
 def start_scheduler(stop_event: threading.Event) -> threading.Thread:
     interval_seconds = max(30, settings.IMAP_SYNC_INTERVAL_SECONDS)
 

@@ -44,6 +44,7 @@ from app.schemas.email_monitor_schemas import (
 )
 from app.services.email_monitor_service import (
     account_to_schema_payload,
+    delete_account_permanently,
     log_audit,
     normalize_folder_list,
     normalize_rule_keywords,
@@ -289,6 +290,42 @@ def update_account(
     session.commit()
     session.refresh(account)
     return EmailMonitorAccountRead(**account_to_schema_payload(account))
+
+
+@router.delete("/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_account(
+    *,
+    account_id: uuid.UUID,
+    request: Request,
+    session: Session = Depends(get_session),
+    current_admin: Usuario = Depends(get_current_admin_user),
+):
+    account = session.get(EmailMonitorAccount, account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Conta IMAP não encontrada.")
+
+    account_name = account.display_name
+    account_email = account.email
+    try:
+        deleted_items = delete_account_permanently(session, account)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    log_audit(
+        session,
+        actor_usuario_id=current_admin.id,
+        event_type="email_monitor.account.deleted",
+        resource_type="email_monitor_account",
+        resource_id=str(account_id),
+        message=f"Conta IMAP '{account_name}' excluida permanentemente.",
+        metadata={
+            "email": account_email,
+            "deleted_items": deleted_items,
+        },
+        ip_address=get_client_ip(request),
+    )
+    session.commit()
+    return None
 
 
 @router.post("/accounts/{account_id}/sync", response_model=EmailMonitorSyncResult)
