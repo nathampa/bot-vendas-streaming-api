@@ -3,6 +3,7 @@ import unittest
 from app.models.email_monitor_models import EmailMonitorRule
 from app.services.email_monitor_service import (
     build_message_hash,
+    describe_imap_error,
     normalize_folder_list,
     rule_matches_message,
     select_incremental_uids,
@@ -45,6 +46,16 @@ class EmailMonitorServiceTestCase(unittest.TestCase):
     def test_normalize_folder_list_removes_duplicates_and_blanks(self):
         folders = normalize_folder_list(['INBOX', ' Financeiro ', '', 'INBOX'])
         self.assertEqual(folders, ['INBOX', 'Financeiro'])
+
+    def test_describe_imap_error_translates_gmail_auth_failure(self):
+        error = describe_imap_error(
+            Exception(b'[AUTHENTICATIONFAILED] Invalid credentials (Failure)'),
+            imap_host='imap.gmail.com',
+            imap_port=993,
+            use_ssl=True,
+        )
+        self.assertIn('Gmail', error)
+        self.assertIn('senha de app', error)
 
 
 if __name__ == '__main__':

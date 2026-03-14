@@ -5,6 +5,7 @@ import html
 import imaplib
 import json
 import re
+import socket
 import threading
 import time
 import uuid
@@ -183,6 +184,65 @@ def truncate_text(value: Optional[str], max_chars: int) -> Optional[str]:
     if len(compact) <= max_chars:
         return compact
     return compact[: max_chars - 1].rstrip() + "..."
+
+
+def mask_identifier(value: Optional[str]) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return "-"
+    if "@" in raw:
+        local, _, domain = raw.partition("@")
+        local_prefix = local[:2]
+        return f"{local_prefix}***@{domain}"
+    return f"{raw[:2]}***"
+
+
+def stringify_imap_exception(exc: Exception) -> str:
+    if getattr(exc, "args", None):
+        parts: list[str] = []
+        for arg in exc.args:
+            if isinstance(arg, bytes):
+                parts.append(arg.decode("utf-8", errors="replace"))
+            else:
+                parts.append(str(arg))
+        rendered = " ".join(part.strip() for part in parts if part).strip()
+        if rendered:
+            return rendered
+    return str(exc).strip() or exc.__class__.__name__
+
+
+def describe_imap_error(exc: Exception, *, imap_host: str, imap_port: int, use_ssl: bool) -> str:
+    raw_message = stringify_imap_exception(exc)
+    lower_message = raw_message.lower()
+    host_lower = (imap_host or "").strip().lower()
+    is_gmail = host_lower in {"imap.gmail.com", "gmail.com", "googlemail.com"} or "gmail" in host_lower
+
+    if isinstance(exc, (socket.timeout, TimeoutError)) or "timed out" in lower_message:
+        return f"Tempo limite ao conectar ao servidor IMAP {imap_host}:{imap_port}. Revise host, porta, SSL e conectividade."
+    if any(token in lower_message for token in ("authenticationfailed", "invalid credentials", "login failed", "auth failed")):
+        if is_gmail:
+            return "Falha de autenticacao no Gmail. Para IMAP, o Google normalmente exige IMAP habilitado e senha de app; a senha comum da conta pode ser recusada."
+        return "Falha de autenticacao no servidor IMAP. Revise usuario, senha e se a conta permite acesso IMAP."
+    if any(token in lower_message for token in ("ssl", "tls", "wrong version number", "certificate")):
+        return f"Falha na negociacao SSL/TLS com {imap_host}:{imap_port}. Revise host, porta e se a opcao SSL esta correta."
+    if any(token in lower_message for token in ("name or service not known", "nodename nor servname provided", "getaddrinfo failed", "temporary failure in name resolution")):
+        return f"Nao foi possivel resolver o host IMAP {imap_host}. Revise o endereco configurado."
+    if any(token in lower_message for token in ("connection refused", "network is unreachable", "no route to host")):
+        transport = "IMAP SSL" if use_ssl else "IMAP"
+        return f"Falha de rede ao conectar via {transport} em {imap_host}:{imap_port}. Revise firewall, porta e conectividade."
+    return truncate_text(raw_message, 240) or "Falha ao conectar no servidor IMAP."
+
+
+def log_imap_failure(context: str, *, imap_host: str, imap_port: int, use_ssl: bool, username: Optional[str], error_message: str) -> None:
+    print(
+        "EMAIL_MONITOR_IMAP_FAILURE "
+        f"context={context} "
+        f"host={imap_host} "
+        f"port={imap_port} "
+        f"ssl={str(use_ssl).lower()} "
+        f"user={mask_identifier(username)} "
+        f'error="{truncate_text(error_message, 400) or "erro-desconhecido"}"'
+    )
 
 
 def parse_email_addresses(raw_value: Optional[str]) -> tuple[Optional[str], Optional[str]]:
@@ -436,8 +496,8 @@ def build_message_headers(message: email.message.Message) -> dict[str, Any]:
 
 def build_connection(account_host: str, account_port: int, use_ssl: bool) -> imaplib.IMAP4:
     if use_ssl:
-        return imaplib.IMAP4_SSL(account_host, account_port)
-    return imaplib.IMAP4(account_host, account_port)
+        return imaplib.IMAP4_SSL(account_host, account_port, timeout=settings.EMAIL_MONITOR_IMAP_TIMEOUT_SECONDS)
+    return imaplib.IMAP4(account_host, account_port, timeout=settings.EMAIL_MONITOR_IMAP_TIMEOUT_SECONDS)
 
 
 def list_mailboxes(connection: imaplib.IMAP4) -> list[str]:
@@ -460,10 +520,22 @@ def test_imap_connection(*, imap_host: str, imap_port: int, imap_username: str, 
         connection = build_connection(imap_host, imap_port, use_ssl)
         connection.login(imap_username, password)
         folders = list_mailboxes(connection)
-        connection.select("INBOX", readonly=True)
+        status, _ = connection.select("INBOX", readonly=True)
+        if status != "OK":
+            return False, "Conexao IMAP autenticada, mas nao foi possivel abrir a pasta INBOX.", folders
         return True, "Conexão IMAP validada com sucesso.", folders
     except Exception as exc:
-        return False, truncate_text(str(exc), 240) or "Falha ao conectar no servidor IMAP.", []
+        raw_error = stringify_imap_exception(exc)
+        friendly_error = describe_imap_error(exc, imap_host=imap_host, imap_port=imap_port, use_ssl=use_ssl)
+        log_imap_failure(
+            "connection_test",
+            imap_host=imap_host,
+            imap_port=imap_port,
+            use_ssl=use_ssl,
+            username=imap_username,
+            error_message=raw_error,
+        )
+        return False, friendly_error, []
     finally:
         if connection is not None:
             try:
@@ -757,15 +829,30 @@ def sync_account(session: Session, account: EmailMonitorAccount, *, trigger_sour
 
     except Exception as exc:
         now = utcnow()
+        raw_error = stringify_imap_exception(exc)
+        friendly_error = describe_imap_error(
+            exc,
+            imap_host=account.imap_host,
+            imap_port=account.imap_port,
+            use_ssl=account.use_ssl,
+        )
         account.sync_status = EmailMonitorSyncStatus.FAILED
         account.last_synced_at = now
         account.last_error_at = now
-        account.last_error_message = truncate_text(str(exc), 500)
+        account.last_error_message = truncate_text(friendly_error, 500)
         account.consecutive_failures += 1
         account.next_retry_at = now + datetime.timedelta(minutes=min(60, 2 ** max(0, account.consecutive_failures - 1)))
         sync_run.status = EmailMonitorSyncRunStatus.FAILED
-        sync_run.error_message = truncate_text(str(exc), 500)
+        sync_run.error_message = truncate_text(friendly_error, 500)
         sync_run.finished_at = now
+        log_imap_failure(
+            f"sync:{trigger_source}",
+            imap_host=account.imap_host,
+            imap_port=account.imap_port,
+            use_ssl=account.use_ssl,
+            username=account.imap_username,
+            error_message=raw_error,
+        )
         session.add(account)
         session.add(sync_run)
         session.commit()
