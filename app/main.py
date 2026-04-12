@@ -139,8 +139,8 @@ origins = [
     "http://177.11.152.132:3001",
     "http://painel.ferreirastreamings.com.br",
     "http://api.ferreirastreamings.com.br",
-    "http://35.222.225.107:3001",
-    "http://35.222.225.107",
+    "http://35.199.119.89:3001",
+    "http://35.199.119.89",
 ]
 
 app.add_middleware(
