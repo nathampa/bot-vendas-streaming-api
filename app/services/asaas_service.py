@@ -78,16 +78,19 @@ class AsaasService:
         return payload if isinstance(payload, dict) else {}
 
     def ensure_customer(self, *, nome: str, email: str, external_reference: str, cpf_cnpj: Optional[str] = None, existing_customer_id: Optional[str] = None) -> str:
-        if existing_customer_id:
-            return existing_customer_id
-
         payload = {
             "name": nome[:100],
             "email": email,
             "externalReference": external_reference,
+            "notificationDisabled": True,
         }
         if cpf_cnpj:
             payload["cpfCnpj"] = cpf_cnpj
+
+        if existing_customer_id:
+            self._request("PUT", f"/customers/{existing_customer_id}", expected_status=200, json=payload)
+            return existing_customer_id
+
         customer = self._request("POST", "/customers", expected_status=200, json=payload)
         customer_id = customer.get("id")
         if not customer_id:
