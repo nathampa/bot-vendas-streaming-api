@@ -35,6 +35,7 @@ MERCADOPAGO_GATEWAY = "MERCADOPAGO"
 ASAAS_FINAL_PAYMENT_EVENTS = {"PAYMENT_RECEIVED", "PAYMENT_CONFIRMED"}
 ASAAS_FINAL_PAYMENT_STATUSES = {"RECEIVED", "CONFIRMED", "PAID"}
 ASAAS_FAILURE_STATUSES = {"FAILED", "CANCELLED", "REFUNDED"}
+ASAAS_MIN_PIX_VALUE = Decimal("5.00")
 
 
 def _calcular_expira_em(criado_em: datetime.datetime) -> datetime.datetime:
@@ -324,6 +325,12 @@ def create_pedido_de_recarga(*, session: Session = Depends(get_session), recarga
     """
     if recarga_in.valor <= 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="O valor da recarga deve ser positivo.")
+
+    if _resolver_gateway_ativo() == ASAAS_GATEWAY and Decimal(recarga_in.valor) < ASAAS_MIN_PIX_VALUE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"O valor mínimo para recarga via PIX é R$ {ASAAS_MIN_PIX_VALUE:.2f}.",
+        )
 
     usuario = get_or_create_usuario(
         session=session,
