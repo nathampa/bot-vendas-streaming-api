@@ -77,7 +77,7 @@ class AsaasService:
 
         return payload if isinstance(payload, dict) else {}
 
-    def ensure_customer(self, *, nome: str, email: str, external_reference: str, existing_customer_id: Optional[str] = None) -> str:
+    def ensure_customer(self, *, nome: str, email: str, external_reference: str, cpf_cnpj: Optional[str] = None, existing_customer_id: Optional[str] = None) -> str:
         if existing_customer_id:
             return existing_customer_id
 
@@ -86,6 +86,8 @@ class AsaasService:
             "email": email,
             "externalReference": external_reference,
         }
+        if cpf_cnpj:
+            payload["cpfCnpj"] = cpf_cnpj
         customer = self._request("POST", "/customers", expected_status=200, json=payload)
         customer_id = customer.get("id")
         if not customer_id:

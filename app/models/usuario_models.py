@@ -22,6 +22,7 @@ class Usuario(SQLModel, table=True):
     
     email: Optional[str] = Field(default=None, unique=True, index=True)
     password_hash: Optional[str] = Field(default=None)
+    cpf_cnpj: Optional[str] = Field(default=None, unique=True, index=True)
     asaas_customer_id: Optional[str] = Field(default=None, unique=True, index=True)
 
     criado_em: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)

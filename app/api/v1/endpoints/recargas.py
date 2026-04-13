@@ -218,11 +218,15 @@ def _criar_pagamento_mercadopago(usuario: Usuario, valor: Decimal) -> Tuple[str,
 def _criar_pagamento_asaas(*, session: Session, usuario: Usuario, valor: Decimal, recarga_id: uuid.UUID) -> Tuple[str, str, str]:
     try:
         service = AsaasService()
+        if not usuario.cpf_cnpj:
+            raise HTTPException(status_code=400, detail="CPF_CNPJ_REQUIRED")
+
         email_pagador = usuario.email or f"user_{usuario.telegram_id}@ferreirastreamings.com"
         customer_id = service.ensure_customer(
             nome=usuario.nome_completo,
             email=email_pagador,
             external_reference=str(usuario.id),
+            cpf_cnpj=usuario.cpf_cnpj,
             existing_customer_id=usuario.asaas_customer_id,
         )
         if usuario.asaas_customer_id != customer_id:

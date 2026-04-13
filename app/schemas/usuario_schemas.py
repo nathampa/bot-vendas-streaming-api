@@ -13,6 +13,11 @@ class UsuarioRegisterRequest(SQLModel):
     nome_completo: str
     referrer_id: Optional[int] = None
 
+
+class UsuarioDocumentoUpdateRequest(SQLModel):
+    telegram_id: int
+    cpf_cnpj: str
+
 # -----------------------------------------------------------------
 # Schema de RESPONSE (O que a API retorna)
 # -----------------------------------------------------------------
@@ -22,6 +27,8 @@ class UsuarioRead(SQLModel):
     nome_completo: str
     saldo_carteira: Decimal
     is_admin: bool
+    cpf_cnpj: Optional[str] = None
+    pending_cashback_percent: Optional[int] = None
 
 # -----------------------------------------------------------------
 # Schema de RESPONSE (O que a API retorna para o histórico do bot)
@@ -92,7 +99,7 @@ class RecargaAdminRead(SQLModel):
     gateway_id: Optional[str]
     criado_em: datetime.datetime
     pago_em: Optional[datetime.datetime]
-    
+
     # Dados do JOIN
     usuario_telegram_id: int
     usuario_nome_completo: str

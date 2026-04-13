@@ -1,62 +1,107 @@
 import datetime
+import re
 import uuid
 from decimal import Decimal, ROUND_HALF_UP
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlmodel import Session, select
 from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import desc, func
+from sqlmodel import Session, select
+
+from app.api.v1.deps import get_bot_api_key, get_current_admin_user
 from app.db.database import get_session
-from app.models.usuario_models import Usuario, AjusteSaldoUsuario
+from app.models.base import StatusEntregaPedido
+from app.models.pedido_models import Pedido
+from app.models.produto_models import Produto
+from app.models.usuario_models import AjusteSaldoUsuario, Usuario
 from app.schemas.usuario_schemas import (
-    UsuarioRegisterRequest,
-    UsuarioRead,
-    UsuarioPedidoRead,
-    UsuarioExpiracaoPendenteRead,
-    UsuarioExpiracaoMarcarNotificadaRequest,
-    UsuarioAdminRead,
     RecargaAdminRead,
+    UsuarioAdminRead,
+    UsuarioDocumentoUpdateRequest,
+    UsuarioExpiracaoMarcarNotificadaRequest,
+    UsuarioExpiracaoPendenteRead,
+    UsuarioPedidoRead,
+    UsuarioRead,
+    UsuarioRegisterRequest,
     UsuarioSaldoAjusteRequest,
     UsuarioSaldoAjusteResponse,
     UsuarioSaldoHistoricoRead,
 )
-from app.api.v1.deps import get_bot_api_key
-from typing import List
-from app.models.pedido_models import Pedido
-from app.models.produto_models import Produto
-from app.models.base import StatusEntregaPedido
-from app.api.v1.deps import get_current_admin_user
-from sqlalchemy import func, desc
 from app.services.pedido_expiracao_service import resolver_data_expiracao_pedido
 
-# Roteador para o Bot (protegido pela API Key)
 router = APIRouter(dependencies=[Depends(get_bot_api_key)])
+admin_router = APIRouter(dependencies=[Depends(get_current_admin_user)])
+TWO_DECIMAL_PLACES = Decimal("0.01")
 
-# --- Função Auxiliar (Colada do recargas.py) ---
+
+def _normalizar_documento(documento: str) -> str:
+    return re.sub(r"\D", "", documento or "")
+
+
+def _documento_invalido_por_repeticao(documento: str) -> bool:
+    return not documento or documento == documento[0] * len(documento)
+
+
+def _validar_cpf(cpf: str) -> bool:
+    if len(cpf) != 11 or _documento_invalido_por_repeticao(cpf):
+        return False
+
+    soma = sum(int(cpf[i]) * (10 - i) for i in range(9))
+    resto = (soma * 10) % 11
+    digito_1 = 0 if resto == 10 else resto
+    if digito_1 != int(cpf[9]):
+        return False
+
+    soma = sum(int(cpf[i]) * (11 - i) for i in range(10))
+    resto = (soma * 10) % 11
+    digito_2 = 0 if resto == 10 else resto
+    return digito_2 == int(cpf[10])
+
+
+def _validar_cnpj(cnpj: str) -> bool:
+    if len(cnpj) != 14 or _documento_invalido_por_repeticao(cnpj):
+        return False
+
+    pesos_1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+    pesos_2 = [6] + pesos_1
+
+    soma = sum(int(cnpj[i]) * pesos_1[i] for i in range(12))
+    resto = soma % 11
+    digito_1 = 0 if resto < 2 else 11 - resto
+    if digito_1 != int(cnpj[12]):
+        return False
+
+    soma = sum(int(cnpj[i]) * pesos_2[i] for i in range(13))
+    resto = soma % 11
+    digito_2 = 0 if resto < 2 else 11 - resto
+    return digito_2 == int(cnpj[13])
+
+
+def _validar_cpf_cnpj(documento: str) -> str:
+    documento_normalizado = _normalizar_documento(documento)
+    if len(documento_normalizado) == 11 and _validar_cpf(documento_normalizado):
+        return documento_normalizado
+    if len(documento_normalizado) == 14 and _validar_cnpj(documento_normalizado):
+        return documento_normalizado
+    raise HTTPException(status_code=400, detail="CPF ou CNPJ inválido.")
+
+
+# --- Função Auxiliar ---
 def get_or_create_usuario(session: Session, telegram_id: int, nome_completo: str, referrer_id_telegram: Optional[int] = None) -> Usuario:
-    """
-    Tenta encontrar um usuário pelo telegram_id.
-    Se não encontrar, cria um novo usuário, processando o referrer_id.
-    """
-
-    # 1. Tenta encontrar o usuário
-    usuario = session.exec(
-        select(Usuario).where(Usuario.telegram_id == telegram_id)
-    ).first()
+    usuario = session.exec(select(Usuario).where(Usuario.telegram_id == telegram_id)).first()
 
     if usuario:
-        # Se encontrou, atualiza o nome (caso o user tenha mudado no Telegram)
         if usuario.nome_completo != nome_completo:
             usuario.nome_completo = nome_completo
             session.add(usuario)
             session.commit()
             session.refresh(usuario)
-        return usuario # Retorna o usuário existente
+        return usuario
 
-    # 2. Se não encontrou (Novo Usuário), processa o indicador (referrer)
     print(f"Usuário com telegram_id {telegram_id} não encontrado. Criando novo usuário.")
-    
+
     db_referrer: Optional[Usuario] = None
     if referrer_id_telegram:
-        # Busca o usuário que indicou pelo ID do Telegram
         stmt_referrer = select(Usuario).where(Usuario.telegram_id == referrer_id_telegram)
         db_referrer = session.exec(stmt_referrer).first()
         if db_referrer:
@@ -64,31 +109,20 @@ def get_or_create_usuario(session: Session, telegram_id: int, nome_completo: str
         else:
             print(f"Referrer com ID {referrer_id_telegram} não encontrado no banco.")
 
-    # Cria o novo usuário
     novo_usuario = Usuario(
         telegram_id=telegram_id,
         nome_completo=nome_completo,
-        # Seta o ID do BD (UUID) do indicador, se ele foi encontrado
-        referrer_id=db_referrer.id if db_referrer else None
+        referrer_id=db_referrer.id if db_referrer else None,
     )
-    
+
     session.add(novo_usuario)
     session.commit()
     session.refresh(novo_usuario)
     return novo_usuario
-# --- Fim da Função Auxiliar ---
 
-admin_router = APIRouter(dependencies=[Depends(get_current_admin_user)])
-TWO_DECIMAL_PLACES = Decimal("0.01")
 
-@admin_router.get("/", response_model=List[UsuarioAdminRead])
-def get_admin_usuarios(
-    *,
-    session: Session = Depends(get_session)
-):
-    """
-    [ADMIN] Lista todos os usuários clientes com contagem de pedidos.
-    """
+@admin_router.get("/", response_model=list[UsuarioAdminRead])
+def get_admin_usuarios(*, session: Session = Depends(get_session)):
     stmt = (
         select(
             Usuario.id,
@@ -96,29 +130,26 @@ def get_admin_usuarios(
             Usuario.nome_completo,
             Usuario.saldo_carteira,
             Usuario.criado_em,
-            func.count(Pedido.id).label("total_pedidos")
+            func.count(Pedido.id).label("total_pedidos"),
         )
-        .join(Pedido, Pedido.usuario_id == Usuario.id, isouter=True) # isouter=True é um LEFT JOIN
-        .where(Usuario.is_admin == False) # Ignora o admin
+        .join(Pedido, Pedido.usuario_id == Usuario.id, isouter=True)
+        .where(Usuario.is_admin == False)
         .group_by(Usuario.id)
         .order_by(Usuario.criado_em.desc())
     )
-    
+
     resultados = session.exec(stmt).all()
-    
-    # Mapeia os resultados para o schema
-    lista_usuarios = [
+    return [
         UsuarioAdminRead(
             id=u.id,
             telegram_id=u.telegram_id,
             nome_completo=u.nome_completo,
             saldo_carteira=u.saldo_carteira,
             criado_em=u.criado_em,
-            total_pedidos=u.total_pedidos
-        ) for u in resultados
+            total_pedidos=u.total_pedidos,
+        )
+        for u in resultados
     ]
-    
-    return lista_usuarios
 
 
 @admin_router.post("/{usuario_id}/ajuste-saldo", response_model=UsuarioSaldoAjusteResponse)
@@ -129,17 +160,7 @@ def ajustar_saldo_usuario(
     session: Session = Depends(get_session),
     current_admin: Usuario = Depends(get_current_admin_user),
 ):
-    """
-    [ADMIN] Ajusta manualmente o saldo da carteira do usuário.
-    Operações:
-    - ADICIONAR: soma o valor informado ao saldo atual
-    - REMOVER: subtrai o valor informado do saldo atual
-    - DEFINIR: define o saldo exatamente para o valor informado
-    """
-    usuario = session.exec(
-        select(Usuario).where(Usuario.id == usuario_id, Usuario.is_admin == False)
-    ).first()
-
+    usuario = session.exec(select(Usuario).where(Usuario.id == usuario_id, Usuario.is_admin == False)).first()
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuário não encontrado.")
 
@@ -147,25 +168,15 @@ def ajustar_saldo_usuario(
     saldo_anterior = Decimal(usuario.saldo_carteira).quantize(TWO_DECIMAL_PLACES, rounding=ROUND_HALF_UP)
 
     if ajuste.operacao in ("ADICIONAR", "REMOVER") and valor_ajuste <= 0:
-        raise HTTPException(
-            status_code=400,
-            detail="O valor do ajuste precisa ser maior que zero para adicionar ou remover saldo.",
-        )
-
+        raise HTTPException(status_code=400, detail="O valor do ajuste precisa ser maior que zero para adicionar ou remover saldo.")
     if ajuste.operacao == "DEFINIR" and valor_ajuste < 0:
-        raise HTTPException(
-            status_code=400,
-            detail="Não é permitido definir saldo negativo.",
-        )
+        raise HTTPException(status_code=400, detail="Não é permitido definir saldo negativo.")
 
     if ajuste.operacao == "ADICIONAR":
         saldo_atual = saldo_anterior + valor_ajuste
     elif ajuste.operacao == "REMOVER":
         if valor_ajuste > saldo_anterior:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Saldo insuficiente para remoção. Saldo atual: R$ {saldo_anterior:.2f}",
-            )
+            raise HTTPException(status_code=400, detail=f"Saldo insuficiente para remoção. Saldo atual: R$ {saldo_anterior:.2f}")
         saldo_atual = saldo_anterior - valor_ajuste
     else:
         saldo_atual = valor_ajuste
@@ -198,24 +209,14 @@ def ajustar_saldo_usuario(
     )
 
 
-@admin_router.get("/{usuario_id}/historico-saldo", response_model=List[UsuarioSaldoHistoricoRead])
-def get_historico_ajustes_saldo_usuario(
-    *,
-    usuario_id: uuid.UUID,
-    limite: int = 20,
-    session: Session = Depends(get_session),
-):
-    """
-    [ADMIN] Retorna histórico de ajustes manuais de saldo de um usuário.
-    """
+@admin_router.get("/{usuario_id}/historico-saldo", response_model=list[UsuarioSaldoHistoricoRead])
+def get_historico_ajustes_saldo_usuario(*, usuario_id: uuid.UUID, limite: int = 20, session: Session = Depends(get_session)):
     if limite < 1:
         raise HTTPException(status_code=400, detail="O limite precisa ser maior ou igual a 1.")
     if limite > 200:
         raise HTTPException(status_code=400, detail="O limite máximo permitido é 200.")
 
-    usuario = session.exec(
-        select(Usuario).where(Usuario.id == usuario_id, Usuario.is_admin == False)
-    ).first()
+    usuario = session.exec(select(Usuario).where(Usuario.id == usuario_id, Usuario.is_admin == False)).first()
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuário não encontrado.")
 
@@ -237,7 +238,6 @@ def get_historico_ajustes_saldo_usuario(
         .order_by(desc(AjusteSaldoUsuario.criado_em))
         .limit(limite)
     )
-
     resultados = session.exec(stmt).all()
     return [
         UsuarioSaldoHistoricoRead(
@@ -255,45 +255,44 @@ def get_historico_ajustes_saldo_usuario(
         for item in resultados
     ]
 
-# --- Endpoint Novo (/start vai chamar este) ---
-@router.post("/register", response_model=UsuarioRead)
-def register_user(
-    *,
-    session: Session = Depends(get_session),
-    user_in: UsuarioRegisterRequest
-):
-    """
-    [BOT] Encontra ou cria um usuário no banco de dados.
-    Este é o "ponto de entrada" principal do bot (ex: /start).
-    """
 
+@router.post("/register", response_model=UsuarioRead)
+def register_user(*, session: Session = Depends(get_session), user_in: UsuarioRegisterRequest):
     usuario = get_or_create_usuario(
         session=session,
         telegram_id=user_in.telegram_id,
         nome_completo=user_in.nome_completo,
-        referrer_id_telegram=user_in.referrer_id
+        referrer_id_telegram=user_in.referrer_id,
     )
     return usuario
 
-@router.get("/meus-pedidos", response_model=List[UsuarioPedidoRead])
-def get_meus_pedidos(
-    *,
-    session: Session = Depends(get_session),
-    telegram_id: int # Recebemos o ID como parâmetro de query (?telegram_id=...)
-):
-    """
-    [BOT] Retorna os 5 últimos pedidos de um usuário.
-    """
 
-    # 1. Encontra o usuário
-    usuario = session.exec(
-        select(Usuario).where(Usuario.telegram_id == telegram_id)
-    ).first()
-
+@router.put("/documento", response_model=UsuarioRead)
+def update_user_documento(*, session: Session = Depends(get_session), documento_in: UsuarioDocumentoUpdateRequest):
+    usuario = session.exec(select(Usuario).where(Usuario.telegram_id == documento_in.telegram_id)).first()
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuário não encontrado.")
 
-    # 2. Query com JOIN para buscar Pedidos e nome do Produto
+    documento_normalizado = _validar_cpf_cnpj(documento_in.cpf_cnpj)
+    usuario_existente = session.exec(
+        select(Usuario).where(Usuario.cpf_cnpj == documento_normalizado, Usuario.id != usuario.id)
+    ).first()
+    if usuario_existente:
+        raise HTTPException(status_code=409, detail="CPF ou CNPJ já está em uso por outro usuário.")
+
+    usuario.cpf_cnpj = documento_normalizado
+    session.add(usuario)
+    session.commit()
+    session.refresh(usuario)
+    return usuario
+
+
+@router.get("/meus-pedidos", response_model=list[UsuarioPedidoRead])
+def get_meus_pedidos(*, session: Session = Depends(get_session), telegram_id: int):
+    usuario = session.exec(select(Usuario).where(Usuario.telegram_id == telegram_id)).first()
+    if not usuario:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado.")
+
     stmt = (
         select(
             Pedido.id,
@@ -311,20 +310,10 @@ def get_meus_pedidos(
     )
 
     resultados = session.exec(stmt).all()
-
-    # 3. Formata a resposta no schema
     today = datetime.date.today()
-    lista_pedidos: List[UsuarioPedidoRead] = []
+    lista_pedidos: list[UsuarioPedidoRead] = []
 
-    for (
-        pid,
-        pnome,
-        vpago,
-        data,
-        email_cliente,
-        estoque_conta_id,
-        conta_mae_id,
-    ) in resultados:
+    for (pid, pnome, vpago, data, email_cliente, estoque_conta_id, conta_mae_id) in resultados:
         data_expiracao, origem_expiracao = resolver_data_expiracao_pedido(
             session=session,
             pedido_id=pid,
@@ -355,22 +344,14 @@ def get_meus_pedidos(
     return lista_pedidos
 
 
-@router.get("/expiracoes-pendentes", response_model=List[UsuarioExpiracaoPendenteRead])
-def get_expiracoes_pendentes(
-    *,
-    session: Session = Depends(get_session),
-    limite: int = 200,
-):
-    """
-    [BOT] Lista pedidos cuja conta expira hoje e ainda não tiveram notificação enviada.
-    """
+@router.get("/expiracoes-pendentes", response_model=list[UsuarioExpiracaoPendenteRead])
+def get_expiracoes_pendentes(*, session: Session = Depends(get_session), limite: int = 200):
     if limite < 1:
         raise HTTPException(status_code=400, detail="O limite precisa ser maior ou igual a 1.")
-    if limite > 1000:
-        raise HTTPException(status_code=400, detail="O limite máximo permitido é 1000.")
+    if limite > 500:
+        raise HTTPException(status_code=400, detail="O limite máximo permitido é 500.")
 
-    hoje = datetime.date.today()
-
+    today = datetime.date.today()
     stmt = (
         select(
             Pedido.id,
@@ -379,27 +360,17 @@ def get_expiracoes_pendentes(
             Pedido.email_cliente,
             Pedido.estoque_conta_id,
             Pedido.conta_mae_id,
-            Pedido.ultima_data_expiracao_notificada,
         )
         .join(Usuario, Usuario.id == Pedido.usuario_id)
         .join(Produto, Produto.id == Pedido.produto_id)
         .where(Pedido.status_entrega == StatusEntregaPedido.ENTREGUE)
         .order_by(Pedido.criado_em.desc())
-        .limit(2000)
+        .limit(limite)
     )
 
     resultados = session.exec(stmt).all()
-
-    pendentes: List[UsuarioExpiracaoPendenteRead] = []
-    for (
-        pedido_id,
-        telegram_id,
-        produto_nome,
-        email_cliente,
-        estoque_conta_id,
-        conta_mae_id,
-        ultima_data_notificada,
-    ) in resultados:
+    pendentes: list[UsuarioExpiracaoPendenteRead] = []
+    for (pedido_id, telegram_id, produto_nome, email_cliente, estoque_conta_id, conta_mae_id) in resultados:
         data_expiracao, origem_expiracao = resolver_data_expiracao_pedido(
             session=session,
             pedido_id=pedido_id,
@@ -407,12 +378,11 @@ def get_expiracoes_pendentes(
             estoque_conta_id=estoque_conta_id,
             conta_mae_id=conta_mae_id,
         )
+        if not data_expiracao or data_expiracao != today:
+            continue
 
-        if not data_expiracao or not origem_expiracao:
-            continue
-        if data_expiracao != hoje:
-            continue
-        if ultima_data_notificada == data_expiracao:
+        pedido = session.get(Pedido, pedido_id)
+        if not pedido or pedido.ultima_data_expiracao_notificada == today:
             continue
 
         pendentes.append(
@@ -425,67 +395,26 @@ def get_expiracoes_pendentes(
             )
         )
 
-        if len(pendentes) >= limite:
-            break
-
     return pendentes
 
 
-@router.post("/expiracoes-pendentes/marcar-notificada")
+@router.post("/expiracoes-pendentes/marcar-notificada", status_code=status.HTTP_204_NO_CONTENT)
 def marcar_expiracao_notificada(
     *,
     session: Session = Depends(get_session),
     payload: UsuarioExpiracaoMarcarNotificadaRequest,
 ):
-    """
-    [BOT] Marca que a notificação de expiração de um pedido foi enviada para uma data específica.
-    """
     pedido = session.get(Pedido, payload.pedido_id)
     if not pedido:
         raise HTTPException(status_code=404, detail="Pedido não encontrado.")
 
-    data_expiracao_atual, _ = resolver_data_expiracao_pedido(
-        session=session,
-        pedido_id=pedido.id,
-        email_cliente=pedido.email_cliente,
-        estoque_conta_id=pedido.estoque_conta_id,
-        conta_mae_id=pedido.conta_mae_id,
-    )
-
-    if data_expiracao_atual != payload.data_expiracao:
-        raise HTTPException(
-            status_code=409,
-            detail="Data de expiração atual do pedido não corresponde à data informada.",
-        )
-
     pedido.ultima_data_expiracao_notificada = payload.data_expiracao
     session.add(pedido)
     session.commit()
+    return None
 
-    return {"status": "ok", "pedido_id": pedido.id, "data_expiracao": payload.data_expiracao}
 
-# Endpoint buscar id de todo os usuarios
-@router.get(
-    "/all-ids",
-    response_model=List[int],
-    include_in_schema=False # Esconde esta rota do /docs público
-)
-def get_all_user_ids(
-    *,
-    session: Session = Depends(get_session)
-):
-    """
-    [BOT-ADMIN] Retorna uma lista de todos os Telegram IDs
-    dos usuários que NÃO são administradores.
-    Usado para o broadcast de mensagens.
-    """
-    
-    # Seleciona apenas os telegram_id de usuários normais
-    stmt = (
-        select(Usuario.telegram_id)
-        .where(Usuario.is_admin == False)
-    )
-    
-    user_ids = session.exec(stmt).all()
-    
-    return user_ids
+@router.get("/ids")
+def get_all_user_ids(*, session: Session = Depends(get_session)):
+    resultados = session.exec(select(Usuario.telegram_id).where(Usuario.is_admin == False)).all()
+    return {"telegram_ids": resultados}
