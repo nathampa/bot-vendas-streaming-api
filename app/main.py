@@ -135,12 +135,22 @@ origins = [
     "http://localhost:5173",
     "http://localhost:5174",
     "http://localhost:3000",
+    "https://localhost:5173",
+    "https://localhost:5174",
+    "https://localhost:3000",
     "http://127.0.0.1:3001",
+    "https://127.0.0.1:3001",
     "http://177.11.152.132:3001",
     "http://painel.ferreirastreamings.com.br",
     "http://api.ferreirastreamings.com.br",
+    "https://painel.ferreirastreamings.com.br",
+    "https://api.ferreirastreamings.com.br",
+    "http://35.222.225.107:3001",
+    "http://35.222.225.107",
     "http://35.199.119.89:3001",
     "http://35.199.119.89",
+    "https://35.199.119.89:3001",
+    "https://35.199.119.89"
 ]
 
 app.add_middleware(
