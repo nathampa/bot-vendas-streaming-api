@@ -21,6 +21,7 @@ class Configuracao(SQLModel, table=True):
 
     # --- Configurações de Afiliados ---
     afiliado_ativo: bool = Field(default=False)
+    modo_manutencao: bool = Field(default=False)
     
     afiliado_gatilho: TipoGatilhoAfiliado = Field(
         default=TipoGatilhoAfiliado.primeira_recarga

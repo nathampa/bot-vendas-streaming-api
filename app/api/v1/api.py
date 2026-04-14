@@ -28,6 +28,7 @@ api_router.include_router(tickets.router, prefix="/tickets", tags=["Tickets (Bot
 api_router.include_router(giftcards.router, prefix="/giftcards", tags=["GiftCards (Bot)"], dependencies=bot_deps)
 api_router.include_router(sugestoes.router, prefix="/sugestoes", tags=["Sugestões (Bot)"], dependencies=bot_deps)
 api_router.include_router(usuarios.router, prefix="/usuarios", tags=["Usuários (Bot)"], dependencies=bot_deps)
+api_router.include_router(configuracoes.bot_router, prefix="/configuracoes", tags=["Configurações (Bot)"], dependencies=bot_deps)
 api_router.include_router(recargas.webhook_router, prefix="/webhook", tags=["Webhooks (Externo)"])
 
 api_router.include_router(produtos.admin_router, prefix="/admin/produtos", tags=["Admin - Produtos"])
