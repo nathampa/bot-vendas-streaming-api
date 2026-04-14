@@ -30,6 +30,17 @@ class UsuarioRead(SQLModel):
     cpf_cnpj: Optional[str] = None
     pending_cashback_percent: Optional[int] = None
 
+class UsuarioPerfilRead(SQLModel):
+    id: uuid.UUID
+    telegram_id: int
+    nome_completo: str
+    saldo_carteira: Decimal
+    criado_em: datetime.datetime
+    total_recargas_pagas: int = 0
+    total_valor_recarregado: Decimal = Decimal("0.00")
+    total_compras: int = 0
+    total_valor_gasto: Decimal = Decimal("0.00")
+
 # -----------------------------------------------------------------
 # Schema de RESPONSE (O que a API retorna para o histórico do bot)
 # -----------------------------------------------------------------

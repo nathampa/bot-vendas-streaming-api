@@ -10,10 +10,10 @@ from sqlmodel import Session, select
 
 from app.api.v1.deps import get_bot_api_key, get_current_admin_user
 from app.db.database import get_session
-from app.models.base import StatusEntregaPedido
+from app.models.base import StatusEntregaPedido, TipoStatusPagamento
 from app.models.pedido_models import Pedido
 from app.models.produto_models import Produto
-from app.models.usuario_models import AjusteSaldoUsuario, Usuario
+from app.models.usuario_models import AjusteSaldoUsuario, RecargaSaldo, Usuario
 from app.schemas.usuario_schemas import (
     RecargaAdminRead,
     UsuarioAdminRead,
@@ -21,6 +21,7 @@ from app.schemas.usuario_schemas import (
     UsuarioExpiracaoMarcarNotificadaRequest,
     UsuarioExpiracaoPendenteRead,
     UsuarioPedidoRead,
+    UsuarioPerfilRead,
     UsuarioRead,
     UsuarioRegisterRequest,
     UsuarioSaldoAjusteRequest,
@@ -285,6 +286,42 @@ def update_user_documento(*, session: Session = Depends(get_session), documento_
     session.commit()
     session.refresh(usuario)
     return usuario
+
+
+@router.get("/perfil", response_model=UsuarioPerfilRead)
+def get_usuario_perfil(*, session: Session = Depends(get_session), telegram_id: int):
+    usuario = session.exec(select(Usuario).where(Usuario.telegram_id == telegram_id)).first()
+    if not usuario:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado.")
+
+    total_recargas_pagas, total_valor_recarregado = session.exec(
+        select(
+            func.count(RecargaSaldo.id),
+            func.coalesce(func.sum(RecargaSaldo.valor_solicitado), 0),
+        ).where(
+            RecargaSaldo.usuario_id == usuario.id,
+            RecargaSaldo.status_pagamento == TipoStatusPagamento.PAGO,
+        )
+    ).one()
+
+    total_compras, total_valor_gasto = session.exec(
+        select(
+            func.count(Pedido.id),
+            func.coalesce(func.sum(Pedido.valor_pago), 0),
+        ).where(Pedido.usuario_id == usuario.id)
+    ).one()
+
+    return UsuarioPerfilRead(
+        id=usuario.id,
+        telegram_id=usuario.telegram_id,
+        nome_completo=usuario.nome_completo,
+        saldo_carteira=usuario.saldo_carteira,
+        criado_em=usuario.criado_em,
+        total_recargas_pagas=int(total_recargas_pagas or 0),
+        total_valor_recarregado=Decimal(total_valor_recarregado or 0).quantize(TWO_DECIMAL_PLACES, rounding=ROUND_HALF_UP),
+        total_compras=int(total_compras or 0),
+        total_valor_gasto=Decimal(total_valor_gasto or 0).quantize(TWO_DECIMAL_PLACES, rounding=ROUND_HALF_UP),
+    )
 
 
 @router.get("/meus-pedidos", response_model=list[UsuarioPedidoRead])
