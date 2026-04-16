@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.api import api_router as api_router_v1
 from app.core.config import settings
 from app.models.base import *
-from app.models.conta_mae_models import ContaMae, ContaMaeConvite
+from app.models.conta_mae_models import ContaMae, ContaMaeConvite, ContaMaeInviteJob
 from app.models.email_monitor_models import (
     AuditLog,
     EmailMonitorAccount,
@@ -29,6 +29,7 @@ from app.schemas.conta_mae_schemas import (
     ContaMaeConviteCreate,
     ContaMaeConviteRead,
     ContaMaeCreate,
+    ContaMaeInviteJobRead,
     ContaMaeUpdate,
 )
 from app.schemas.email_monitor_schemas import (
@@ -61,6 +62,7 @@ Produto.model_rebuild()
 EstoqueConta.model_rebuild()
 ContaMae.model_rebuild()
 ContaMaeConvite.model_rebuild()
+ContaMaeInviteJob.model_rebuild()
 Pedido.model_rebuild()
 TicketSuporte.model_rebuild()
 GiftCard.model_rebuild()
@@ -89,6 +91,7 @@ ContaMaeAdminRead.model_rebuild()
 ContaMaeAdminDetails.model_rebuild()
 ContaMaeConviteRead.model_rebuild()
 ContaMaeConviteCreate.model_rebuild()
+ContaMaeInviteJobRead.model_rebuild()
 EmailMonitorAccountRead.model_rebuild()
 EmailMonitorAccountDetail.model_rebuild()
 EmailMonitorRuleRead.model_rebuild()

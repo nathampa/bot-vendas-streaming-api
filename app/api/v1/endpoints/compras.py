@@ -1,6 +1,6 @@
 import uuid
 import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlmodel import Session, select
 from sqlalchemy.exc import NoResultFound 
 
@@ -18,12 +18,14 @@ from app.services.disponibilidade_service import (
     inativar_conta_mae_se_lotada,
     inativar_produto_sem_contas_disponiveis,
 )
+from app.services.conta_mae_invite_service import create_invite_job_for_convite, enqueue_invite_job
 
 router = APIRouter()
 
 @router.post("/", response_model=CompraCreateResponse)
 def create_compra_com_saldo(
     *,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
     compra_in: CompraCreateRequest
 ):
@@ -200,6 +202,7 @@ def create_compra_com_saldo(
         session.add(novo_pedido)
         session.flush()
 
+        invite_job_id = None
         if conta_mae_para_alocar_id and compra_in.email_cliente:
             convite = ContaMaeConvite(
                 conta_mae_id=conta_mae_para_alocar_id,
@@ -207,12 +210,20 @@ def create_compra_com_saldo(
                 email_cliente=compra_in.email_cliente
             )
             session.add(convite)
+            session.flush()
+            invite_job = create_invite_job_for_convite(session, convite)
+            invite_job_id = invite_job.id
         
         # --- 6. Commit e Retorno ---
         session.commit()
         
         session.refresh(novo_pedido)
         session.refresh(usuario)
+        if invite_job_id:
+            try:
+                enqueue_invite_job(invite_job_id, background_tasks=background_tasks)
+            except Exception as exc:
+                print(f"AVISO: falha ao enfileirar job de convite {invite_job_id}: {exc}")
         
         return CompraCreateResponse(
             pedido_id=novo_pedido.id,

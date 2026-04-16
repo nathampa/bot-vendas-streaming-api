@@ -9,8 +9,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     JWT_SECRET_KEY: str
     AES_ENCRYPTION_KEY: str
-
-    # CELERY_BROKER_URL: str
+    CELERY_BROKER_URL: str | None = None
 
     BOT_API_KEY: str
     MERCADOPAGO_ACCESS_TOKEN: str
@@ -22,6 +21,16 @@ class Settings(BaseSettings):
     EMAIL_MONITOR_MAX_BODY_CHARS: int = 20000
     EMAIL_MONITOR_SYNC_BATCH_SIZE: int = 100
     EMAIL_MONITOR_WEBHOOK_TIMEOUT_SECONDS: int = 5
+    OPENAI_INVITE_AUTOMATION_ENABLED: bool = True
+    OPENAI_INVITE_BASE_URL: str = "https://chatgpt.com"
+    OPENAI_INVITE_MEMBERS_URL: str = "https://chatgpt.com/admin"
+    OPENAI_INVITE_SESSION_ROOT: str = "/tmp/openai-invite-sessions"
+    OPENAI_INVITE_EVIDENCE_ROOT: str = "/tmp/openai-invite-evidence"
+    OPENAI_INVITE_HEADLESS: bool = True
+    OPENAI_INVITE_PAGE_TIMEOUT_MS: int = 30000
+    OPENAI_INVITE_OTP_TIMEOUT_SECONDS: int = 120
+    OPENAI_INVITE_OTP_POLL_INTERVAL_SECONDS: int = 5
+    OPENAI_INVITE_IMAP_FETCH_LIMIT: int = 20
 
     RECARGA_EXPIRACAO_MINUTOS: int = 30
 
