@@ -296,3 +296,34 @@ def add_convite_conta_mae(
         criado_em=convite.criado_em,
         pedido_id=convite.pedido_id,
     )
+
+
+@router.delete("/{conta_mae_id}/convites/{convite_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_convite_conta_mae(
+    *,
+    session: Session = Depends(get_session),
+    conta_mae_id: uuid.UUID,
+    convite_id: uuid.UUID,
+):
+    conta = session.get(ContaMae, conta_mae_id)
+    if not conta:
+        raise HTTPException(status_code=404, detail="Conta mÃ£e nÃ£o encontrada")
+
+    convite = session.get(ContaMaeConvite, convite_id)
+    if not convite or convite.conta_mae_id != conta_mae_id:
+        raise HTTPException(status_code=404, detail="Convite nÃ£o encontrado para esta conta mÃ£e")
+
+    conta_estava_lotada = conta.slots_ocupados >= conta.max_slots
+    conta.slots_ocupados = max(conta.slots_ocupados - 1, 0)
+
+    if conta_estava_lotada and (conta.data_expiracao is None or conta.data_expiracao >= datetime.date.today()):
+        conta.is_ativo = True
+
+    session.delete(convite)
+    session.add(conta)
+    produto = session.get(Produto, conta.produto_id)
+    if produto:
+        sincronizar_status_produto_por_disponibilidade(session, produto)
+    session.commit()
+
+    return
