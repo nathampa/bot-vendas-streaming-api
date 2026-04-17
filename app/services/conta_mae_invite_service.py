@@ -1,5 +1,6 @@
 import datetime
 import email
+import json
 import os
 import re
 import shlex
@@ -120,6 +121,24 @@ def evidence_root() -> Path:
     return root
 
 
+def host_runner_root() -> Path:
+    root = Path(settings.OPENAI_INVITE_HOST_RUNNER_ROOT)
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def host_runner_requests_dir() -> Path:
+    path = host_runner_root() / "requests"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def host_runner_results_dir() -> Path:
+    path = host_runner_root() / "results"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def build_session_path(conta_mae: ContaMae) -> str:
     if conta_mae.session_storage_path:
         return conta_mae.session_storage_path
@@ -136,6 +155,14 @@ def build_session_test_evidence_dir(conta_mae: ContaMae) -> Path:
     path = evidence_root() / f"session-test-{conta_mae.id}"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def build_host_runner_request_path(request_id: uuid.UUID) -> Path:
+    return host_runner_requests_dir() / f"{request_id}.json"
+
+
+def build_host_runner_result_path(request_id: uuid.UUID) -> Path:
+    return host_runner_results_dir() / f"{request_id}.json"
 
 
 def job_result_payload(job: ContaMaeInviteJob) -> dict:
@@ -240,6 +267,10 @@ def retry_invite_job(session: Session, job: ContaMaeInviteJob) -> ContaMaeInvite
     return job
 
 
+def host_runner_enabled() -> bool:
+    return settings.OPENAI_INVITE_HOST_RUNNER_ENABLED
+
+
 def find_email_monitor_account_for_conta_mae(session: Session, conta_mae: ContaMae) -> Optional[EmailMonitorAccount]:
     if conta_mae.email_monitor_account_id:
         account = session.get(EmailMonitorAccount, conta_mae.email_monitor_account_id)
@@ -342,6 +373,100 @@ def fetch_openai_otp_via_imap(session: Session, conta_mae: ContaMae) -> str:
         time.sleep(settings.OPENAI_INVITE_OTP_POLL_INTERVAL_SECONDS)
 
     raise OTPTimeoutError(last_error or "Código OTP da OpenAI não encontrado a tempo.")
+
+
+def build_imap_credentials_payload(
+    session: Session,
+    conta_mae: ContaMae,
+) -> Optional[dict]:
+    account = find_email_monitor_account_for_conta_mae(session, conta_mae)
+    if not account:
+        return None
+
+    password = decrypt_data(account.imap_password_encrypted)
+    if not password:
+        return None
+
+    return {
+        "email": account.email,
+        "imap_host": account.imap_host,
+        "imap_port": account.imap_port,
+        "imap_username": account.imap_username,
+        "imap_password": password,
+        "use_ssl": account.use_ssl,
+        "selected_folders": normalize_folder_list(account.selected_folders_json),
+        "fetch_limit": settings.OPENAI_INVITE_IMAP_FETCH_LIMIT,
+        "poll_interval_seconds": settings.OPENAI_INVITE_OTP_POLL_INTERVAL_SECONDS,
+        "otp_timeout_seconds": settings.OPENAI_INVITE_OTP_TIMEOUT_SECONDS,
+    }
+
+
+def write_host_runner_request(payload: dict) -> tuple[uuid.UUID, Path]:
+    request_id = uuid.uuid4()
+    request_path = build_host_runner_request_path(request_id)
+    result_path = build_host_runner_result_path(request_id)
+    full_payload = {
+        **payload,
+        "request_id": str(request_id),
+        "result_path": str(result_path),
+        "created_at": utcnow().isoformat(),
+    }
+    temp_path = request_path.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(full_payload, ensure_ascii=True), encoding="utf-8")
+    temp_path.chmod(0o600)
+    temp_path.replace(request_path)
+    return request_id, result_path
+
+
+def wait_for_host_runner_result(result_path: Path) -> dict:
+    deadline = time.time() + settings.OPENAI_INVITE_HOST_RUNNER_TIMEOUT_SECONDS
+    while time.time() < deadline:
+        if result_path.exists():
+            try:
+                payload = json.loads(result_path.read_text(encoding="utf-8"))
+            finally:
+                result_path.unlink(missing_ok=True)
+            return payload
+        time.sleep(0.5)
+    raise InviteAutomationError("O runner host-side da OpenAI nao respondeu a tempo.")
+
+
+def execute_host_runner_request(payload: dict) -> dict:
+    _, result_path = write_host_runner_request(payload)
+    return wait_for_host_runner_result(result_path)
+
+
+def build_host_runner_session_test_request(conta_mae: ContaMae) -> dict:
+    session_path = Path(build_session_path(conta_mae))
+    evidence_dir = build_session_test_evidence_dir(conta_mae)
+    return {
+        "action": "session_test",
+        "session_path": str(session_path),
+        "evidence_dir": str(evidence_dir),
+        "members_url": settings.OPENAI_INVITE_MEMBERS_URL,
+    }
+
+
+def build_host_runner_invite_request(
+    session: Session,
+    job: ContaMaeInviteJob,
+    conta_mae: ContaMae,
+) -> dict:
+    password = decrypt_data(conta_mae.senha)
+    if not password:
+        raise ManualReviewRequired("Nao foi possivel descriptografar a senha da conta-mae.")
+
+    return {
+        "action": "send_invite",
+        "job_id": str(job.id),
+        "session_path": build_session_path(conta_mae),
+        "evidence_dir": str(build_evidence_dir(job)),
+        "members_url": settings.OPENAI_INVITE_MEMBERS_URL,
+        "login_email": conta_mae.login,
+        "login_password": password,
+        "invite_email": job.email_cliente,
+        "imap": build_imap_credentials_payload(session, conta_mae),
+    }
 
 
 def first_visible_locator(page, selectors: list[str]):
@@ -611,6 +736,29 @@ def test_conta_mae_session(conta_mae: ContaMae) -> dict:
     session_path.mkdir(parents=True, exist_ok=True)
     evidence_dir = build_session_test_evidence_dir(conta_mae)
 
+    if host_runner_enabled():
+        try:
+            result = execute_host_runner_request(build_host_runner_session_test_request(conta_mae))
+            return {
+                "conta_mae_id": conta_mae.id,
+                "session_storage_path": str(session_path),
+                "status": result.get("status", "ERROR"),
+                "message": result.get("message", "Runner host-side nao retornou mensagem."),
+                "tested_at": result.get("tested_at", tested_at),
+                "current_url": result.get("current_url"),
+                "evidence_path": result.get("evidence_path"),
+            }
+        except InviteAutomationError as exc:
+            return {
+                "conta_mae_id": conta_mae.id,
+                "session_storage_path": str(session_path),
+                "status": "ERROR",
+                "message": str(exc),
+                "tested_at": tested_at,
+                "current_url": None,
+                "evidence_path": None,
+            }
+
     if sync_playwright is None:
         return {
             "conta_mae_id": conta_mae.id,
@@ -812,6 +960,19 @@ def send_invite(page, job: ContaMaeInviteJob, evidence_dir: Path) -> None:
 
 
 def run_invite_automation(session: Session, job: ContaMaeInviteJob, conta_mae: ContaMae) -> str:
+    if host_runner_enabled():
+        result = execute_host_runner_request(build_host_runner_invite_request(session, job, conta_mae))
+        status = result.get("status")
+        if status == "SENT":
+            return result.get("auth_path_used") or "session_reused"
+        if result.get("evidence_path"):
+            job.evidence_path = result["evidence_path"]
+        if status == "MANUAL_REVIEW":
+            raise ManualReviewRequired(result.get("message") or "Runner host-side exigiu revisao manual.")
+        if result.get("auth_step_failed") == "otp":
+            raise OTPTimeoutError(result.get("message") or "Runner host-side nao conseguiu concluir o OTP.")
+        raise InviteAutomationError(result.get("message") or "Runner host-side falhou ao enviar o convite.")
+
     if sync_playwright is None:
         raise ManualReviewRequired("Playwright não está instalado no ambiente da API.")
 

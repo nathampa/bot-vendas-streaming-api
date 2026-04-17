@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenAI Invite Host Runner
+After=network.target
+
+[Service]
+Type=simple
+User=Nathan
+WorkingDirectory=/opt/bot-vendas/bot_vendas_api
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/bot-vendas/runtime/openai-host-runner-venv/bin/python /opt/bot-vendas/bot_vendas_api/scripts/openai_invite_host_runner.py --daemon --queue-root /opt/bot-vendas/runtime/openai-invite-host-runner
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
