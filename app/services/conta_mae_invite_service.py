@@ -492,6 +492,32 @@ def click_first_button(page, labels: list[str]) -> bool:
     return False
 
 
+def wait_for_spinner_to_settle(page, timeout_ms: int = 10000) -> None:
+    spinner = page.locator('[class*="animate-spin"]').first
+    deadline = time.time() + (timeout_ms / 1000)
+    while time.time() < deadline:
+        try:
+            if spinner.count() == 0 or not spinner.is_visible():
+                return
+        except Exception:
+            return
+        time.sleep(0.2)
+
+
+def wait_until_button_visible(page, labels: list[str], timeout_ms: int = 10000) -> bool:
+    deadline = time.time() + (timeout_ms / 1000)
+    while time.time() < deadline:
+        for label in labels:
+            try:
+                button = page.get_by_role("button", name=re.compile(f"^{re.escape(label)}$", re.IGNORECASE)).first
+                if button.count() > 0 and button.is_visible():
+                    return True
+            except Exception:
+                continue
+        time.sleep(0.2)
+    return False
+
+
 def fill_visible(page, selectors: list[str], value: str) -> bool:
     locator = first_visible_locator(page, selectors)
     if not locator:
@@ -925,12 +951,17 @@ def navigate_to_invite_surface(page) -> None:
     goto_openai_members(page)
     if first_visible_locator(page, INVITE_INPUT_SELECTORS):
         return
+    wait_for_spinner_to_settle(page)
     click_first_button(page, ["members", "manage members", "team", "workspace"])
     page.wait_for_timeout(1000)
+    wait_for_spinner_to_settle(page)
+    click_first_button(page, ["users"])
+    wait_until_button_visible(page, ["Invite member"], timeout_ms=12000)
     if first_visible_locator(page, INVITE_INPUT_SELECTORS):
         return
-    click_first_button(page, ["invite", "invite members", "add member", "add members"])
+    click_first_button(page, ["invite member", "invite members", "add member", "add members", "invite"])
     page.wait_for_timeout(1000)
+    wait_for_spinner_to_settle(page)
 
 
 def send_invite(page, job: ContaMaeInviteJob, evidence_dir: Path) -> None:
