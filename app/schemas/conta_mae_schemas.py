@@ -4,6 +4,8 @@ from typing import List, Optional
 
 from sqlmodel import Field, SQLModel
 
+from app.models.base import InviteProviderProduto
+
 
 class ContaMaeCreate(SQLModel):
     produto_id: uuid.UUID
@@ -83,6 +85,8 @@ class ContaMaeSessionTestResponse(SQLModel):
 class ContaMaeAdminRead(SQLModel):
     id: uuid.UUID
     produto_id: uuid.UUID
+    invite_provider: InviteProviderProduto = InviteProviderProduto.NONE
+    uses_openai_invite_automation: bool = False
     login: str
     max_slots: int
     slots_ocupados: int

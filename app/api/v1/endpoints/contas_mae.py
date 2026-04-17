@@ -80,6 +80,7 @@ def _convites_count_and_emails(session: Session) -> tuple[dict[uuid.UUID, int], 
 def _to_conta_read(
     conta: ContaMae,
     *,
+    produto: Produto,
     total_convites: int,
     emails_vinculados: List[str],
 ) -> ContaMaeAdminRead:
@@ -91,6 +92,8 @@ def _to_conta_read(
     return ContaMaeAdminRead(
         id=conta.id,
         produto_id=conta.produto_id,
+        invite_provider=produto.invite_provider,
+        uses_openai_invite_automation=produto.uses_openai_invite_automation(),
         login=conta.login,
         max_slots=conta.max_slots,
         slots_ocupados=conta.slots_ocupados,
@@ -252,16 +255,21 @@ def create_conta_mae(
     session.commit()
     session.refresh(conta)
 
-    return _to_conta_read(conta, total_convites=0, emails_vinculados=[])
+    return _to_conta_read(conta, produto=produto, total_convites=0, emails_vinculados=[])
 
 
 @router.get("/", response_model=List[ContaMaeAdminRead])
 def get_contas_mae(session: Session = Depends(get_session)):
     contas = session.exec(select(ContaMae)).all()
     counts_map, emails_map = _convites_count_and_emails(session)
+    produtos_map = {
+        produto.id: produto
+        for produto in session.exec(select(Produto)).all()
+    }
     return [
         _to_conta_read(
             conta,
+            produto=produtos_map[conta.produto_id],
             total_convites=counts_map.get(conta.id, 0),
             emails_vinculados=sorted(list(emails_map.get(conta.id, set()))),
         )
@@ -292,8 +300,10 @@ def get_conta_mae(
     ).all()
 
     senha_descriptografada = security.decrypt_data(conta.senha)
+    produto = _get_conta_mae_produto_or_404(session, conta)
     conta_read = _to_conta_read(
         conta,
+        produto=produto,
         total_convites=len(convites_db),
         emails_vinculados=sorted(list({convite.email_cliente for convite in convites_db if convite.email_cliente})),
     )
@@ -395,7 +405,9 @@ def update_conta_mae(
             }
         )
     )
-    return _to_conta_read(conta, total_convites=total_convites, emails_vinculados=emails)
+    if not produto:
+        raise HTTPException(status_code=404, detail="Produto da conta mãe não encontrado")
+    return _to_conta_read(conta, produto=produto, total_convites=total_convites, emails_vinculados=emails)
 
 
 @router.delete("/{conta_mae_id}", status_code=status.HTTP_204_NO_CONTENT)
