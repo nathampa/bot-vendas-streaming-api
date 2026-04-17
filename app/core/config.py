@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     BOT_API_KEY: str
     MERCADOPAGO_ACCESS_TOKEN: str
     TELEGRAM_BOT_TOKEN: str
+    ADMIN_TELEGRAM_ID: int | None = 1792589341
 
     IMAP_SYNC_WORKER_ENABLED: bool = True
     IMAP_SYNC_INTERVAL_SECONDS: int = 300

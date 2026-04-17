@@ -27,6 +27,9 @@ from app.models.conta_mae_models import (
     ContaMaeInviteJobStatus,
 )
 from app.models.email_monitor_models import EmailMonitorAccount
+from app.models.pedido_models import Pedido
+from app.models.produto_models import Produto
+from app.models.usuario_models import Usuario
 from app.services.email_monitor_service import (
     build_connection,
     decode_mime_header,
@@ -34,6 +37,10 @@ from app.services.email_monitor_service import (
     normalize_folder_list,
     parse_sent_datetime,
     stringify_imap_exception,
+)
+from app.services.notification_service import (
+    send_openai_invite_failure_admin_alert,
+    send_openai_invite_sent_message,
 )
 from app.services.security import decrypt_data
 
@@ -99,6 +106,19 @@ CHALLENGE_TEXT_HINTS = (
     "cf-turnstile",
     "challenge-platform",
 )
+GENERIC_WORKSPACE_TEXTS = {
+    "chatgpt",
+    "admin",
+    "members",
+    "users",
+    "settings",
+    "workspace",
+    "workspaces",
+    "invite",
+    "invite member",
+    "invite members",
+    "pending invites",
+}
 
 
 def utcnow() -> datetime.datetime:
@@ -490,6 +510,59 @@ def click_first_button(page, labels: list[str]) -> bool:
         except Exception:
             continue
     return False
+
+
+def normalize_workspace_name(raw_value: str | None) -> str | None:
+    if not raw_value:
+        return None
+    value = re.sub(r"\s+", " ", raw_value).strip(" -|:\n\t")
+    if not value or len(value) > 80:
+        return None
+    lowered = value.lower()
+    if lowered in GENERIC_WORKSPACE_TEXTS:
+        return None
+    if lowered.startswith("chatgpt - admin"):
+        return None
+    if "@" in value:
+        return None
+    if any(token in lowered for token in ("invite member", "pending invites", "workspace settings")):
+        return None
+    return value
+
+
+def extract_workspace_name(page) -> str | None:
+    try:
+        title = normalize_workspace_name(page.title())
+        if title and "admin" not in title.lower():
+            return title
+    except Exception:
+        pass
+
+    selector_candidates = [
+        '[data-testid*="workspace"]',
+        '[aria-label*="workspace" i]',
+        '[id*="workspace" i]',
+        'button[aria-haspopup="menu"]',
+    ]
+    for selector in selector_candidates:
+        try:
+            locator = page.locator(selector)
+            for index in range(min(locator.count(), 10)):
+                candidate = normalize_workspace_name(locator.nth(index).inner_text(timeout=500))
+                if candidate:
+                    return candidate
+        except Exception:
+            continue
+
+    try:
+        buttons = page.locator("button")
+        for index in range(min(buttons.count(), 12)):
+            candidate = normalize_workspace_name(buttons.nth(index).inner_text(timeout=300))
+            if candidate:
+                return candidate
+    except Exception:
+        pass
+    return None
 
 
 def wait_for_spinner_to_settle(page, timeout_ms: int = 10000) -> None:
@@ -964,7 +1037,7 @@ def navigate_to_invite_surface(page) -> None:
     wait_for_spinner_to_settle(page)
 
 
-def send_invite(page, job: ContaMaeInviteJob, evidence_dir: Path) -> None:
+def send_invite(page, job: ContaMaeInviteJob, evidence_dir: Path) -> str | None:
     navigate_to_invite_surface(page)
     if not first_visible_locator(page, INVITE_INPUT_SELECTORS):
         capture(page, evidence_dir, "invite_surface_not_found")
@@ -982,20 +1055,25 @@ def send_invite(page, job: ContaMaeInviteJob, evidence_dir: Path) -> None:
     lowered = body_text.lower()
     if any(pattern.search(lowered) for pattern in SUCCESS_TEXT_PATTERNS):
         capture(page, evidence_dir, "invite_sent")
-        return
+        return extract_workspace_name(page)
     if "error" in lowered or "invalid" in lowered:
         capture(page, evidence_dir, "invite_error")
         write_html_snapshot(page, evidence_dir, "invite_error")
         raise InviteAutomationError("A OpenAI retornou erro ao enviar o convite.")
     capture(page, evidence_dir, "invite_post_submit")
+    return extract_workspace_name(page)
 
 
-def run_invite_automation(session: Session, job: ContaMaeInviteJob, conta_mae: ContaMae) -> str:
+def run_invite_automation(session: Session, job: ContaMaeInviteJob, conta_mae: ContaMae) -> dict:
     if host_runner_enabled():
         result = execute_host_runner_request(build_host_runner_invite_request(session, job, conta_mae))
         status = result.get("status")
         if status == "SENT":
-            return result.get("auth_path_used") or "session_reused"
+            return {
+                "auth_path_used": result.get("auth_path_used") or "session_reused",
+                "workspace_name": result.get("workspace_name"),
+                "evidence_path": result.get("evidence_path"),
+            }
         if result.get("evidence_path"):
             job.evidence_path = result["evidence_path"]
         if status == "MANUAL_REVIEW":
@@ -1018,10 +1096,54 @@ def run_invite_automation(session: Session, job: ContaMaeInviteJob, conta_mae: C
             context.set_default_timeout(settings.OPENAI_INVITE_PAGE_TIMEOUT_MS)
             page = context.pages[0] if context.pages else context.new_page()
             auth_path = ensure_logged_in(page, conta_mae, session, evidence_dir)
-            send_invite(page, job, evidence_dir)
-            return auth_path
+            workspace_name = send_invite(page, job, evidence_dir)
+            return {
+                "auth_path_used": auth_path,
+                "workspace_name": workspace_name,
+                "evidence_path": str(evidence_dir),
+            }
         finally:
             context_manager.__exit__(None, None, None)
+
+
+def notify_invite_job_sent(
+    session: Session,
+    job: ContaMaeInviteJob,
+    *,
+    workspace_name: str | None = None,
+) -> None:
+    pedido = session.get(Pedido, job.pedido_id) if job.pedido_id else None
+    if not pedido:
+        return
+    usuario = session.get(Usuario, pedido.usuario_id) if pedido.usuario_id else None
+    if not usuario or not usuario.telegram_id:
+        return
+    produto = session.get(Produto, pedido.produto_id) if pedido.produto_id else None
+    produto_nome = produto.nome if produto else "seu produto"
+    send_openai_invite_sent_message(
+        telegram_id=usuario.telegram_id,
+        email_cliente=job.email_cliente,
+        produto_nome=produto_nome,
+        workspace_name=workspace_name,
+    )
+
+
+def notify_invite_job_admin_failure(
+    session: Session,
+    job: ContaMaeInviteJob,
+    conta_mae: ContaMae,
+) -> None:
+    pedido = session.get(Pedido, job.pedido_id) if job.pedido_id else None
+    produto = session.get(Produto, pedido.produto_id) if pedido and pedido.produto_id else None
+    send_openai_invite_failure_admin_alert(
+        status=job.status.value if hasattr(job.status, "value") else str(job.status),
+        conta_mae_login=conta_mae.login,
+        email_cliente=job.email_cliente,
+        job_id=str(job.id),
+        pedido_id=str(job.pedido_id) if job.pedido_id else None,
+        produto_nome=produto.nome if produto else None,
+        motivo=job.last_error,
+    )
 
 
 def process_invite_job(job_id: uuid.UUID) -> dict:
@@ -1054,16 +1176,18 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
         session.refresh(conta_mae)
 
         try:
-            auth_path = run_invite_automation(session, job, conta_mae)
+            automation_result = run_invite_automation(session, job, conta_mae)
             refreshed_job = session.get(ContaMaeInviteJob, job_id)
             refreshed_conta = session.get(ContaMae, conta_mae.id)
             if not refreshed_job or not refreshed_conta:
                 raise InviteAutomationError("Job ou conta-mãe indisponível após automação.")
             refreshed_job.status = ContaMaeInviteJobStatus.SENT
-            refreshed_job.auth_path_used = auth_path
+            refreshed_job.auth_path_used = automation_result["auth_path_used"]
             refreshed_job.auth_step_failed = None
             refreshed_job.last_error = None
-            refreshed_job.evidence_path = str(build_evidence_dir(refreshed_job))
+            refreshed_job.evidence_path = (
+                automation_result.get("evidence_path") or str(build_evidence_dir(refreshed_job))
+            )
             refreshed_job.finished_at = utcnow()
             refreshed_job.locked_at = None
             refreshed_conta.ultimo_convite_sucesso_em = refreshed_job.finished_at
@@ -1074,6 +1198,14 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
             session.add(refreshed_conta)
             session.commit()
             session.refresh(refreshed_job)
+            try:
+                notify_invite_job_sent(
+                    session,
+                    refreshed_job,
+                    workspace_name=automation_result.get("workspace_name"),
+                )
+            except Exception as exc:
+                print(f"AVISO: falha ao notificar cliente do convite {refreshed_job.id}: {exc}")
             return job_result_payload(refreshed_job)
         except OTPTimeoutError as exc:
             refreshed_job = session.get(ContaMaeInviteJob, job_id)
@@ -1089,6 +1221,10 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
             session.add(refreshed_conta)
             session.commit()
             session.refresh(refreshed_job)
+            try:
+                notify_invite_job_admin_failure(session, refreshed_job, refreshed_conta)
+            except Exception as exc_notify:
+                print(f"AVISO: falha ao alertar admin do convite {refreshed_job.id}: {exc_notify}")
             return job_result_payload(refreshed_job)
         except ManualReviewRequired as exc:
             refreshed_job = session.get(ContaMaeInviteJob, job_id)
@@ -1103,6 +1239,10 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
             session.add(refreshed_conta)
             session.commit()
             session.refresh(refreshed_job)
+            try:
+                notify_invite_job_admin_failure(session, refreshed_job, refreshed_conta)
+            except Exception as exc_notify:
+                print(f"AVISO: falha ao alertar admin do convite {refreshed_job.id}: {exc_notify}")
             return job_result_payload(refreshed_job)
         except (InviteAutomationError, PlaywrightTimeoutError) as exc:
             refreshed_job = session.get(ContaMaeInviteJob, job_id)
@@ -1117,4 +1257,8 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
             session.add(refreshed_conta)
             session.commit()
             session.refresh(refreshed_job)
+            try:
+                notify_invite_job_admin_failure(session, refreshed_job, refreshed_conta)
+            except Exception as exc_notify:
+                print(f"AVISO: falha ao alertar admin do convite {refreshed_job.id}: {exc_notify}")
             return job_result_payload(refreshed_job)

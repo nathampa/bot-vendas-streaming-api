@@ -67,6 +67,19 @@ CHALLENGE_TEXT_HINTS = (
     "cf-turnstile",
     "challenge-platform",
 )
+GENERIC_WORKSPACE_TEXTS = {
+    "chatgpt",
+    "admin",
+    "members",
+    "users",
+    "settings",
+    "workspace",
+    "workspaces",
+    "invite",
+    "invite member",
+    "invite members",
+    "pending invites",
+}
 
 
 class HostRunnerError(Exception):
@@ -145,6 +158,59 @@ def click_first_button(page, labels: list[str]) -> bool:
         except Exception:
             continue
     return False
+
+
+def normalize_workspace_name(raw_value: str | None) -> str | None:
+    if not raw_value:
+        return None
+    value = re.sub(r"\s+", " ", raw_value).strip(" -|:\n\t")
+    if not value or len(value) > 80:
+        return None
+    lowered = value.lower()
+    if lowered in GENERIC_WORKSPACE_TEXTS:
+        return None
+    if lowered.startswith("chatgpt - admin"):
+        return None
+    if "@" in value:
+        return None
+    if any(token in lowered for token in ("invite member", "pending invites", "workspace settings")):
+        return None
+    return value
+
+
+def extract_workspace_name(page) -> str | None:
+    try:
+        title = normalize_workspace_name(page.title())
+        if title and "admin" not in title.lower():
+            return title
+    except Exception:
+        pass
+
+    selector_candidates = [
+        '[data-testid*="workspace"]',
+        '[aria-label*="workspace" i]',
+        '[id*="workspace" i]',
+        'button[aria-haspopup="menu"]',
+    ]
+    for selector in selector_candidates:
+        try:
+            locator = page.locator(selector)
+            for index in range(min(locator.count(), 10)):
+                candidate = normalize_workspace_name(locator.nth(index).inner_text(timeout=500))
+                if candidate:
+                    return candidate
+        except Exception:
+            continue
+
+    try:
+        buttons = page.locator("button")
+        for index in range(min(buttons.count(), 12)):
+            candidate = normalize_workspace_name(buttons.nth(index).inner_text(timeout=300))
+            if candidate:
+                return candidate
+    except Exception:
+        pass
+    return None
 
 
 def wait_for_spinner_to_settle(page, timeout_ms: int = 10000) -> None:
@@ -406,7 +472,7 @@ def ensure_logged_in(page, request: dict, evidence_dir: Path) -> str:
     raise ManualReviewRequired("Fluxo de autenticacao nao convergiu para uma sessao logada.")
 
 
-def send_invite(page, request: dict, evidence_dir: Path) -> None:
+def send_invite(page, request: dict, evidence_dir: Path) -> str | None:
     navigate_to_invite_surface(page, request["members_url"])
     if not first_visible_locator(page, INVITE_INPUT_SELECTORS):
         capture(page, evidence_dir, "invite_surface_not_found")
@@ -424,12 +490,13 @@ def send_invite(page, request: dict, evidence_dir: Path) -> None:
     body_text = page.locator("body").inner_text(timeout=1500).lower()
     if any(pattern.search(body_text) for pattern in SUCCESS_TEXT_PATTERNS):
         capture(page, evidence_dir, "invite_sent")
-        return
+        return extract_workspace_name(page)
     if "error" in body_text or "invalid" in body_text:
         capture(page, evidence_dir, "invite_error")
         write_html_snapshot(page, evidence_dir, "invite_error")
         raise HostRunnerError("A OpenAI retornou erro ao enviar o convite.")
     capture(page, evidence_dir, "invite_post_submit")
+    return extract_workspace_name(page)
 
 
 def find_free_port() -> int:
@@ -665,11 +732,12 @@ def run_send_invite(request: dict) -> dict:
                 context = browser.contexts[0]
                 page = context.pages[0] if context.pages else context.new_page()
                 auth_path = ensure_logged_in(page, request, evidence_dir)
-                send_invite(page, request, evidence_dir)
+                workspace_name = send_invite(page, request, evidence_dir)
                 return {
                     "status": "SENT",
                     "message": "Convite enviado com sucesso.",
                     "auth_path_used": auth_path,
+                    "workspace_name": workspace_name,
                     "evidence_path": str(evidence_dir),
                 }
             finally:
