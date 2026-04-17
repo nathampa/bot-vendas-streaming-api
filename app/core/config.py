@@ -24,8 +24,8 @@ class Settings(BaseSettings):
     OPENAI_INVITE_AUTOMATION_ENABLED: bool = True
     OPENAI_INVITE_BASE_URL: str = "https://chatgpt.com"
     OPENAI_INVITE_MEMBERS_URL: str = "https://chatgpt.com/admin"
-    OPENAI_INVITE_SESSION_ROOT: str = "/tmp/openai-invite-sessions"
-    OPENAI_INVITE_EVIDENCE_ROOT: str = "/tmp/openai-invite-evidence"
+    OPENAI_INVITE_SESSION_ROOT: str = "/opt/bot-vendas/runtime/openai-invite-sessions"
+    OPENAI_INVITE_EVIDENCE_ROOT: str = "/opt/bot-vendas/runtime/openai-invite-evidence"
     OPENAI_INVITE_HEADLESS: bool = True
     OPENAI_INVITE_PAGE_TIMEOUT_MS: int = 30000
     OPENAI_INVITE_OTP_TIMEOUT_SECONDS: int = 120

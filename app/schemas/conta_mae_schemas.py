@@ -56,6 +56,24 @@ class ContaMaeInviteJobRead(SQLModel):
     updated_at: datetime.datetime
 
 
+class ContaMaeSessionPrepareResponse(SQLModel):
+    conta_mae_id: uuid.UUID
+    session_storage_path: str
+    launch_url: str
+    launch_command: str
+    browser_hint: str
+
+
+class ContaMaeSessionTestResponse(SQLModel):
+    conta_mae_id: uuid.UUID
+    session_storage_path: str
+    status: str
+    message: str
+    tested_at: datetime.datetime
+    current_url: Optional[str] = None
+    evidence_path: Optional[str] = None
+
+
 class ContaMaeAdminRead(SQLModel):
     id: uuid.UUID
     produto_id: uuid.UUID

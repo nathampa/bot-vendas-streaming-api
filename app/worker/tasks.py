@@ -214,11 +214,11 @@ def process_conta_mae_invite_job(job_id: str):
         processed_job = process_invite_job(uuid.UUID(job_id))
         print(
             "CELERY WORKER: Job de convite concluído. "
-            f"status={processed_job.status} conta_mae_id={processed_job.conta_mae_id}"
+            f"status={processed_job['status']} conta_mae_id={processed_job['conta_mae_id']}"
         )
         return {
-            "job_id": str(processed_job.id),
-            "status": processed_job.status.value if hasattr(processed_job.status, "value") else str(processed_job.status),
+            "job_id": processed_job["id"],
+            "status": processed_job["status"],
         }
     except Exception as exc:
         print(f"ERRO CRÍTICO na tarefa 'process_conta_mae_invite_job' ({job_id}): {exc}")

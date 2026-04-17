@@ -1,6 +1,7 @@
 import datetime
 import email
 import re
+import shlex
 import threading
 import time
 import uuid
@@ -86,6 +87,13 @@ SUCCESS_TEXT_PATTERNS = [
         r"already invited",
     )
 ]
+CHALLENGE_TEXT_HINTS = (
+    "just a moment",
+    "verify you are human",
+    "enable javascript and cookies to continue",
+    "cf-turnstile",
+    "challenge-platform",
+)
 
 
 def utcnow() -> datetime.datetime:
@@ -118,6 +126,26 @@ def build_evidence_dir(job: ContaMaeInviteJob) -> Path:
     path = evidence_root() / str(job.id)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def build_session_test_evidence_dir(conta_mae: ContaMae) -> Path:
+    path = evidence_root() / f"session-test-{conta_mae.id}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def job_result_payload(job: ContaMaeInviteJob) -> dict:
+    return {
+        "id": str(job.id),
+        "status": job.status.value if hasattr(job.status, "value") else str(job.status),
+        "conta_mae_id": str(job.conta_mae_id),
+        "email_cliente": job.email_cliente,
+        "attempt_count": job.attempt_count,
+        "last_error": job.last_error,
+        "auth_path_used": job.auth_path_used,
+        "auth_step_failed": job.auth_step_failed,
+        "evidence_path": job.evidence_path,
+    }
 
 
 def job_to_schema_payload(job: ContaMaeInviteJob) -> dict:
@@ -165,7 +193,7 @@ def process_invite_job_task(job_id: str) -> None:
         processed_job = process_invite_job(uuid.UUID(job_id))
         print(
             "BACKGROUND TASK: Job de convite processado. "
-            f"id={processed_job.id} status={processed_job.status}"
+            f"id={processed_job['id']} status={processed_job['status']}"
         )
     except Exception as exc:
         print(f"ERRO CRÍTICO na tarefa local de convite ({job_id}): {exc}")
@@ -362,6 +390,17 @@ def write_html_snapshot(page, evidence_dir: Path, name: str) -> Optional[str]:
 
 
 def detect_auth_state(page) -> str:
+    page_html = ""
+    page_title = ""
+    try:
+        page_html = page.content().lower()
+    except Exception:
+        page_html = ""
+    try:
+        page_title = (page.title() or "").lower()
+    except Exception:
+        page_title = ""
+
     if first_visible_locator(page, OTP_INPUT_SELECTORS):
         return "otp_required"
     if first_visible_locator(page, PASSWORD_INPUT_SELECTORS):
@@ -370,6 +409,12 @@ def detect_auth_state(page) -> str:
         return "email_required"
 
     body_text = page.locator("body").inner_text(timeout=1000).lower()
+    if any(hint in body_text for hint in CHALLENGE_TEXT_HINTS):
+        return "captcha_required"
+    if any(hint in page_html for hint in CHALLENGE_TEXT_HINTS):
+        return "captcha_required"
+    if any(hint in page_title for hint in CHALLENGE_TEXT_HINTS):
+        return "captcha_required"
     if "captcha" in body_text or "verify you are human" in body_text:
         return "captcha_required"
     if "members" in body_text or "invite" in body_text or "workspace" in body_text:
@@ -379,9 +424,158 @@ def detect_auth_state(page) -> str:
     return "logged_in"
 
 
+def goto_openai_members(page) -> None:
+    page.goto(settings.OPENAI_INVITE_MEMBERS_URL, wait_until="domcontentloaded")
+    page.wait_for_load_state("domcontentloaded")
+    page.wait_for_timeout(1500)
+
+
+def build_manual_session_launch_command(conta_mae: ContaMae) -> str:
+    session_path = build_session_path(conta_mae)
+    return (
+        f"google-chrome --user-data-dir={shlex.quote(session_path)} "
+        f"--new-window {shlex.quote(settings.OPENAI_INVITE_MEMBERS_URL)}"
+    )
+
+
+def prepare_conta_mae_session(conta_mae: ContaMae) -> dict:
+    session_path = Path(build_session_path(conta_mae))
+    session_path.mkdir(parents=True, exist_ok=True)
+    conta_mae.session_storage_path = str(session_path)
+    return {
+        "conta_mae_id": conta_mae.id,
+        "session_storage_path": str(session_path),
+        "launch_url": settings.OPENAI_INVITE_MEMBERS_URL,
+        "launch_command": build_manual_session_launch_command(conta_mae),
+        "browser_hint": "Abra esse comando na VM via RDP, conclua o login e depois feche o Chrome antes de testar.",
+    }
+
+
+def test_conta_mae_session(conta_mae: ContaMae) -> dict:
+    tested_at = utcnow()
+    session_path = Path(build_session_path(conta_mae))
+    session_path.mkdir(parents=True, exist_ok=True)
+    evidence_dir = build_session_test_evidence_dir(conta_mae)
+
+    if sync_playwright is None:
+        return {
+            "conta_mae_id": conta_mae.id,
+            "session_storage_path": str(session_path),
+            "status": "ERROR",
+            "message": "Playwright não está disponível para validar a sessão.",
+            "tested_at": tested_at,
+            "current_url": None,
+            "evidence_path": None,
+        }
+
+    try:
+        with sync_playwright() as playwright:
+            try:
+                context = playwright.chromium.launch_persistent_context(
+                    user_data_dir=str(session_path),
+                    headless=True,
+                    viewport={"width": 1440, "height": 960},
+                )
+            except Exception as exc:
+                lowered = str(exc).lower()
+                profile_in_use = "singleton" in lowered or "in use" in lowered
+                return {
+                    "conta_mae_id": conta_mae.id,
+                    "session_storage_path": str(session_path),
+                    "status": "PROFILE_IN_USE" if profile_in_use else "ERROR",
+                    "message": "Feche o Chrome dessa conta na VM antes de testar a sessão."
+                    if profile_in_use
+                    else f"Não foi possível abrir o perfil persistente: {exc}",
+                    "tested_at": tested_at,
+                    "current_url": None,
+                    "evidence_path": None,
+                }
+
+            try:
+                context.set_default_timeout(settings.OPENAI_INVITE_PAGE_TIMEOUT_MS)
+                page = context.pages[0] if context.pages else context.new_page()
+                goto_openai_members(page)
+                current_url = page.url
+                state = detect_auth_state(page)
+
+                if state == "captcha_required":
+                    capture(page, evidence_dir, "session_test_challenge")
+                    html_path = write_html_snapshot(page, evidence_dir, "session_test_challenge")
+                    return {
+                        "conta_mae_id": conta_mae.id,
+                        "session_storage_path": str(session_path),
+                        "status": "CHALLENGE",
+                        "message": "A OpenAI/Cloudflare pediu uma verificação manual nesta sessão.",
+                        "tested_at": tested_at,
+                        "current_url": current_url,
+                        "evidence_path": html_path,
+                    }
+
+                if state in {"email_required", "password_required", "otp_required", "unknown_auth_state"}:
+                    capture(page, evidence_dir, "session_test_login_required")
+                    html_path = write_html_snapshot(page, evidence_dir, "session_test_login_required")
+                    return {
+                        "conta_mae_id": conta_mae.id,
+                        "session_storage_path": str(session_path),
+                        "status": "NEEDS_LOGIN",
+                        "message": "A sessão ainda não está autenticada. Faça o login manual na VM e teste novamente.",
+                        "tested_at": tested_at,
+                        "current_url": current_url,
+                        "evidence_path": html_path,
+                    }
+
+                navigate_to_invite_surface(page)
+                current_url = page.url
+                if first_visible_locator(page, INVITE_INPUT_SELECTORS):
+                    capture(page, evidence_dir, "session_test_valid")
+                    return {
+                        "conta_mae_id": conta_mae.id,
+                        "session_storage_path": str(session_path),
+                        "status": "VALID",
+                        "message": "Sessão válida e pronta para automação de convites.",
+                        "tested_at": tested_at,
+                        "current_url": current_url,
+                        "evidence_path": None,
+                    }
+
+                capture(page, evidence_dir, "session_test_invite_not_found")
+                html_path = write_html_snapshot(page, evidence_dir, "session_test_invite_not_found")
+                return {
+                    "conta_mae_id": conta_mae.id,
+                    "session_storage_path": str(session_path),
+                    "status": "MANUAL_REVIEW",
+                    "message": "Sessão autenticada, mas a interface de convites não foi localizada automaticamente.",
+                    "tested_at": tested_at,
+                    "current_url": current_url,
+                    "evidence_path": html_path,
+                }
+            except PlaywrightTimeoutError as exc:
+                return {
+                    "conta_mae_id": conta_mae.id,
+                    "session_storage_path": str(session_path),
+                    "status": "ERROR",
+                    "message": f"Tempo esgotado ao validar a sessão: {exc}",
+                    "tested_at": tested_at,
+                    "current_url": None,
+                    "evidence_path": None,
+                }
+            finally:
+                context.close()
+    except Exception as exc:
+        return {
+            "conta_mae_id": conta_mae.id,
+            "session_storage_path": str(session_path),
+            "status": "ERROR",
+            "message": f"Falha inesperada ao validar a sessão: {exc}",
+            "tested_at": tested_at,
+            "current_url": None,
+            "evidence_path": None,
+        }
+
+
 def ensure_logged_in(page, conta_mae: ContaMae, session: Session, evidence_dir: Path) -> str:
     auth_path: list[str] = []
-    page.goto(settings.OPENAI_INVITE_MEMBERS_URL, wait_until="networkidle")
+    goto_openai_members(page)
 
     for _ in range(10):
         state = detect_auth_state(page)
@@ -429,7 +623,7 @@ def ensure_logged_in(page, conta_mae: ContaMae, session: Session, evidence_dir: 
 
 
 def navigate_to_invite_surface(page) -> None:
-    page.goto(settings.OPENAI_INVITE_MEMBERS_URL, wait_until="networkidle")
+    goto_openai_members(page)
     if first_visible_locator(page, INVITE_INPUT_SELECTORS):
         return
     click_first_button(page, ["members", "manage members", "team", "workspace"])
@@ -490,13 +684,13 @@ def run_invite_automation(session: Session, job: ContaMaeInviteJob, conta_mae: C
             context.close()
 
 
-def process_invite_job(job_id: uuid.UUID) -> ContaMaeInviteJob:
+def process_invite_job(job_id: uuid.UUID) -> dict:
     with Session(engine) as session:
         job = session.get(ContaMaeInviteJob, job_id)
         if not job:
             raise InviteAutomationError(f"Job {job_id} não encontrado.")
         if job.status == ContaMaeInviteJobStatus.SENT:
-            return job
+            return job_result_payload(job)
 
         conta_mae = session.get(ContaMae, job.conta_mae_id)
         if not conta_mae:
@@ -504,7 +698,8 @@ def process_invite_job(job_id: uuid.UUID) -> ContaMaeInviteJob:
             job.last_error = "Conta-mãe não encontrada para o job."
             session.add(job)
             session.commit()
-            return job
+            session.refresh(job)
+            return job_result_payload(job)
 
         now = utcnow()
         job.status = ContaMaeInviteJobStatus.RUNNING
@@ -539,7 +734,7 @@ def process_invite_job(job_id: uuid.UUID) -> ContaMaeInviteJob:
             session.add(refreshed_conta)
             session.commit()
             session.refresh(refreshed_job)
-            return refreshed_job
+            return job_result_payload(refreshed_job)
         except OTPTimeoutError as exc:
             refreshed_job = session.get(ContaMaeInviteJob, job_id)
             refreshed_conta = session.get(ContaMae, conta_mae.id)
@@ -553,7 +748,8 @@ def process_invite_job(job_id: uuid.UUID) -> ContaMaeInviteJob:
             session.add(refreshed_job)
             session.add(refreshed_conta)
             session.commit()
-            return refreshed_job
+            session.refresh(refreshed_job)
+            return job_result_payload(refreshed_job)
         except ManualReviewRequired as exc:
             refreshed_job = session.get(ContaMaeInviteJob, job_id)
             refreshed_conta = session.get(ContaMae, conta_mae.id)
@@ -566,7 +762,8 @@ def process_invite_job(job_id: uuid.UUID) -> ContaMaeInviteJob:
             session.add(refreshed_job)
             session.add(refreshed_conta)
             session.commit()
-            return refreshed_job
+            session.refresh(refreshed_job)
+            return job_result_payload(refreshed_job)
         except (InviteAutomationError, PlaywrightTimeoutError) as exc:
             refreshed_job = session.get(ContaMaeInviteJob, job_id)
             refreshed_conta = session.get(ContaMae, conta_mae.id)
@@ -579,4 +776,5 @@ def process_invite_job(job_id: uuid.UUID) -> ContaMaeInviteJob:
             session.add(refreshed_job)
             session.add(refreshed_conta)
             session.commit()
-            return refreshed_job
+            session.refresh(refreshed_job)
+            return job_result_payload(refreshed_job)

@@ -17,6 +17,8 @@ from app.schemas.conta_mae_schemas import (
     ContaMaeConviteRead,
     ContaMaeCreate,
     ContaMaeInviteJobRead,
+    ContaMaeSessionPrepareResponse,
+    ContaMaeSessionTestResponse,
     ContaMaeUpdate,
 )
 from app.services import security
@@ -24,7 +26,9 @@ from app.services.conta_mae_invite_service import (
     create_invite_job_for_convite,
     enqueue_invite_job,
     job_to_schema_payload,
+    prepare_conta_mae_session,
     retry_invite_job,
+    test_conta_mae_session,
 )
 from app.services.disponibilidade_service import (
     inativar_conta_mae_se_lotada,
@@ -211,6 +215,37 @@ def get_conta_mae(
         ],
         invite_jobs=[_to_job_read(job) for job in jobs_db],
     )
+
+
+@router.post("/{conta_mae_id}/session/prepare", response_model=ContaMaeSessionPrepareResponse)
+def prepare_conta_mae_openai_session(
+    *,
+    session: Session = Depends(get_session),
+    conta_mae_id: uuid.UUID,
+):
+    conta = session.get(ContaMae, conta_mae_id)
+    if not conta:
+        raise HTTPException(status_code=404, detail="Conta mãe não encontrada")
+
+    payload = prepare_conta_mae_session(conta)
+    session.add(conta)
+    session.commit()
+    session.refresh(conta)
+    return ContaMaeSessionPrepareResponse(**payload)
+
+
+@router.post("/{conta_mae_id}/session/test", response_model=ContaMaeSessionTestResponse)
+def test_conta_mae_openai_session(
+    *,
+    session: Session = Depends(get_session),
+    conta_mae_id: uuid.UUID,
+):
+    conta = session.get(ContaMae, conta_mae_id)
+    if not conta:
+        raise HTTPException(status_code=404, detail="Conta mãe não encontrada")
+
+    payload = test_conta_mae_session(conta)
+    return ContaMaeSessionTestResponse(**payload)
 
 
 @router.put("/{conta_mae_id}", response_model=ContaMaeAdminRead)
