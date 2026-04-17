@@ -23,9 +23,12 @@ from app.schemas.conta_mae_schemas import (
 )
 from app.services import security
 from app.services.conta_mae_invite_service import (
+    cancel_invite_job,
     create_invite_job_for_convite,
     enqueue_invite_job,
     job_to_schema_payload,
+    mark_invite_job_sent_manually,
+    notify_invite_job_sent,
     prepare_conta_mae_session,
     retry_invite_job,
     test_conta_mae_session,
@@ -37,6 +40,13 @@ from app.services.disponibilidade_service import (
 
 
 router = APIRouter(dependencies=[Depends(get_current_admin_user)])
+ACTIVE_INVITE_JOB_STATUSES = (
+    "PENDING",
+    "RUNNING",
+    "WAITING_OTP",
+    "RETRY_WAIT",
+    "MANUAL_REVIEW",
+)
 
 
 def _convites_count_and_emails(session: Session) -> tuple[dict[uuid.UUID, int], dict[uuid.UUID, set[str]]]:
@@ -91,13 +101,32 @@ def list_invite_jobs(
     *,
     session: Session = Depends(get_session),
     conta_mae_id: Optional[uuid.UUID] = None,
+    status: Optional[str] = None,
+    email: Optional[str] = None,
+    only_active: bool = False,
     limit: int = 100,
 ):
-    stmt = select(ContaMaeInviteJob).order_by(ContaMaeInviteJob.created_at.desc()).limit(min(max(limit, 1), 500))
+    stmt = (
+        select(ContaMaeInviteJob, ContaMae.login)
+        .join(ContaMae, ContaMae.id == ContaMaeInviteJob.conta_mae_id)
+        .order_by(ContaMaeInviteJob.created_at.desc())
+        .limit(min(max(limit, 1), 500))
+    )
     if conta_mae_id:
         stmt = stmt.where(ContaMaeInviteJob.conta_mae_id == conta_mae_id)
-    jobs = session.exec(stmt).all()
-    return [_to_job_read(job) for job in jobs]
+    if status:
+        stmt = stmt.where(ContaMaeInviteJob.status == status.strip().upper())
+    elif only_active:
+        stmt = stmt.where(ContaMaeInviteJob.status.in_(ACTIVE_INVITE_JOB_STATUSES))
+    if email:
+        stmt = stmt.where(func.lower(ContaMaeInviteJob.email_cliente).contains(email.strip().lower()))
+    rows = session.exec(stmt).all()
+    payloads = []
+    for job, conta_login in rows:
+        payload = job_to_schema_payload(job)
+        payload["conta_mae_login"] = conta_login
+        payloads.append(ContaMaeInviteJobRead(**payload))
+    return payloads
 
 
 @router.post("/invite-jobs/{job_id}/retry", response_model=ContaMaeInviteJobRead)
@@ -119,6 +148,59 @@ def retry_conta_mae_invite_job(
             enqueue_invite_job(job.id, background_tasks=background_tasks)
         except Exception as exc:
             print(f"AVISO: falha ao reenfileirar job de convite {job.id}: {exc}")
+        return _to_job_read(job)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/invite-jobs/{job_id}/cancel", response_model=ContaMaeInviteJobRead)
+def cancel_conta_mae_invite_job(
+    *,
+    session: Session = Depends(get_session),
+    job_id: uuid.UUID,
+):
+    job = session.get(ContaMaeInviteJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job de convite não encontrado")
+
+    try:
+        cancel_invite_job(session, job)
+        session.commit()
+        session.refresh(job)
+        return _to_job_read(job)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/invite-jobs/{job_id}/mark-manual-sent", response_model=ContaMaeInviteJobRead)
+def mark_conta_mae_invite_job_manual_sent(
+    *,
+    session: Session = Depends(get_session),
+    job_id: uuid.UUID,
+):
+    job = session.get(ContaMaeInviteJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job de convite não encontrado")
+
+    conta = session.get(ContaMae, job.conta_mae_id)
+    if not conta:
+        raise HTTPException(status_code=404, detail="Conta mãe não encontrada para este job")
+
+    try:
+        mark_invite_job_sent_manually(session, job, conta)
+        session.commit()
+        session.refresh(job)
+        session.refresh(conta)
+        try:
+            notify_invite_job_sent(session, job)
+        except Exception as exc_notify:
+            print(f"AVISO: falha ao notificar cliente do convite manual {job.id}: {exc_notify}")
         return _to_job_read(job)
     except HTTPException:
         raise

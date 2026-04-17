@@ -220,6 +220,7 @@ def job_to_schema_payload(job: ContaMaeInviteJob) -> dict:
         "id": job.id,
         "convite_id": job.convite_id,
         "conta_mae_id": job.conta_mae_id,
+        "conta_mae_login": job.conta_mae.login if getattr(job, "conta_mae", None) else None,
         "pedido_id": job.pedido_id,
         "email_cliente": job.email_cliente,
         "status": job.status.value if hasattr(job.status, "value") else str(job.status),
@@ -232,9 +233,19 @@ def job_to_schema_payload(job: ContaMaeInviteJob) -> dict:
         "started_at": job.started_at,
         "finished_at": job.finished_at,
         "next_retry_at": job.next_retry_at,
+        "resolved_manually": job.resolved_manually,
+        "manual_resolution_at": job.manual_resolution_at,
+        "manual_resolution_note": job.manual_resolution_note,
+        "cancelled_at": job.cancelled_at,
         "created_at": job.created_at,
         "updated_at": job.updated_at,
     }
+
+
+def job_final_state_managed_externally(job: ContaMaeInviteJob) -> bool:
+    return job.status == ContaMaeInviteJobStatus.CANCELLED or (
+        job.status == ContaMaeInviteJobStatus.SENT and job.resolved_manually
+    )
 
 
 def invite_retry_cooldowns_seconds() -> list[int]:
@@ -340,6 +351,8 @@ def enqueue_invite_job(
 def retry_invite_job(session: Session, job: ContaMaeInviteJob) -> ContaMaeInviteJob:
     if job.status == ContaMaeInviteJobStatus.SENT:
         raise ManualReviewRequired("O job já foi concluído com sucesso.")
+    if job.status == ContaMaeInviteJobStatus.CANCELLED:
+        raise ManualReviewRequired("O job foi cancelado e não pode ser reenfileirado.")
     job.status = ContaMaeInviteJobStatus.PENDING
     job.last_error = None
     job.auth_step_failed = None
@@ -347,7 +360,59 @@ def retry_invite_job(session: Session, job: ContaMaeInviteJob) -> ContaMaeInvite
     job.started_at = None
     job.finished_at = None
     job.next_retry_at = None
+    job.cancelled_at = None
+    job.resolved_manually = False
+    job.manual_resolution_at = None
+    job.manual_resolution_note = None
     session.add(job)
+    session.flush()
+    return job
+
+
+def cancel_invite_job(session: Session, job: ContaMaeInviteJob) -> ContaMaeInviteJob:
+    if job.status == ContaMaeInviteJobStatus.SENT:
+        raise ManualReviewRequired("O job já foi concluído com sucesso.")
+    if job.status == ContaMaeInviteJobStatus.CANCELLED:
+        raise ManualReviewRequired("O job já foi cancelado.")
+    now = utcnow()
+    job.status = ContaMaeInviteJobStatus.CANCELLED
+    job.last_error = "Job cancelado manualmente pelo admin."
+    job.locked_at = None
+    job.finished_at = now
+    job.next_retry_at = None
+    job.cancelled_at = now
+    session.add(job)
+    session.flush()
+    return job
+
+
+def mark_invite_job_sent_manually(
+    session: Session,
+    job: ContaMaeInviteJob,
+    conta_mae: ContaMae,
+    *,
+    manual_resolution_note: str | None = None,
+) -> ContaMaeInviteJob:
+    if job.status == ContaMaeInviteJobStatus.SENT:
+        raise ManualReviewRequired("O job já foi concluído com sucesso.")
+    if job.status == ContaMaeInviteJobStatus.CANCELLED:
+        raise ManualReviewRequired("O job foi cancelado e não pode ser marcado como enviado.")
+
+    now = utcnow()
+    job.status = ContaMaeInviteJobStatus.SENT
+    job.last_error = None
+    job.auth_step_failed = None
+    job.locked_at = None
+    job.finished_at = now
+    job.next_retry_at = None
+    job.cancelled_at = None
+    job.resolved_manually = True
+    job.manual_resolution_at = now
+    job.manual_resolution_note = manual_resolution_note.strip() if manual_resolution_note else None
+    conta_mae.ultimo_convite_sucesso_em = now
+    conta_mae.ultimo_erro_automacao = None
+    session.add(job)
+    session.add(conta_mae)
     session.flush()
     return job
 
@@ -1250,6 +1315,9 @@ def schedule_retry_or_manual_review(
     *,
     error_message: str,
 ) -> dict:
+    if job.status == ContaMaeInviteJobStatus.SENT or job_final_state_managed_externally(job):
+        return job_result_payload(job)
+
     now = utcnow()
     deadline = invite_retry_deadline(job)
     remaining_seconds = int((deadline - now).total_seconds())
@@ -1317,7 +1385,7 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
         job = session.get(ContaMaeInviteJob, job_id)
         if not job:
             raise InviteAutomationError(f"Job {job_id} não encontrado.")
-        if job.status == ContaMaeInviteJobStatus.SENT:
+        if job.status in (ContaMaeInviteJobStatus.SENT, ContaMaeInviteJobStatus.CANCELLED):
             return job_result_payload(job)
         if (
             job.status == ContaMaeInviteJobStatus.RETRY_WAIT
@@ -1354,6 +1422,8 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
             refreshed_conta = session.get(ContaMae, conta_mae.id)
             if not refreshed_job or not refreshed_conta:
                 raise InviteAutomationError("Job ou conta-mãe indisponível após automação.")
+            if job_final_state_managed_externally(refreshed_job):
+                return job_result_payload(refreshed_job)
             refreshed_job.status = ContaMaeInviteJobStatus.SENT
             refreshed_job.auth_path_used = automation_result["auth_path_used"]
             refreshed_job.auth_step_failed = None
@@ -1364,6 +1434,10 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
             refreshed_job.finished_at = utcnow()
             refreshed_job.locked_at = None
             refreshed_job.next_retry_at = None
+            refreshed_job.cancelled_at = None
+            refreshed_job.resolved_manually = False
+            refreshed_job.manual_resolution_at = None
+            refreshed_job.manual_resolution_note = None
             refreshed_conta.ultimo_convite_sucesso_em = refreshed_job.finished_at
             refreshed_conta.ultimo_login_automatizado_em = refreshed_job.finished_at
             refreshed_conta.session_storage_path = build_session_path(refreshed_conta)
@@ -1384,6 +1458,8 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
         except OTPTimeoutError as exc:
             refreshed_job = session.get(ContaMaeInviteJob, job_id)
             refreshed_conta = session.get(ContaMae, conta_mae.id)
+            if refreshed_job and job_final_state_managed_externally(refreshed_job):
+                return job_result_payload(refreshed_job)
             refreshed_job.status = ContaMaeInviteJobStatus.FAILED
             refreshed_job.auth_step_failed = "otp"
             refreshed_job.last_error = str(exc)
@@ -1415,6 +1491,8 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
                 )
             refreshed_job = session.get(ContaMaeInviteJob, job_id)
             refreshed_conta = session.get(ContaMae, conta_mae.id)
+            if refreshed_job and job_final_state_managed_externally(refreshed_job):
+                return job_result_payload(refreshed_job)
             refreshed_job.status = ContaMaeInviteJobStatus.MANUAL_REVIEW
             refreshed_job.last_error = str(exc)
             refreshed_job.evidence_path = str(build_evidence_dir(refreshed_job))
@@ -1445,6 +1523,8 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
                 )
             refreshed_job = session.get(ContaMaeInviteJob, job_id)
             refreshed_conta = session.get(ContaMae, conta_mae.id)
+            if refreshed_job and job_final_state_managed_externally(refreshed_job):
+                return job_result_payload(refreshed_job)
             refreshed_job.status = ContaMaeInviteJobStatus.FAILED
             refreshed_job.last_error = str(exc)
             refreshed_job.evidence_path = str(build_evidence_dir(refreshed_job))

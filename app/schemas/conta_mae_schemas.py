@@ -41,6 +41,7 @@ class ContaMaeInviteJobRead(SQLModel):
     id: uuid.UUID
     convite_id: uuid.UUID
     conta_mae_id: uuid.UUID
+    conta_mae_login: Optional[str] = None
     pedido_id: Optional[uuid.UUID] = None
     email_cliente: str
     status: str
@@ -53,6 +54,10 @@ class ContaMaeInviteJobRead(SQLModel):
     started_at: Optional[datetime.datetime] = None
     finished_at: Optional[datetime.datetime] = None
     next_retry_at: Optional[datetime.datetime] = None
+    resolved_manually: bool = False
+    manual_resolution_at: Optional[datetime.datetime] = None
+    manual_resolution_note: Optional[str] = None
+    cancelled_at: Optional[datetime.datetime] = None
     created_at: datetime.datetime
     updated_at: datetime.datetime
 

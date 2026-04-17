@@ -19,6 +19,7 @@ class ContaMaeInviteJobStatus(str, enum.Enum):
     SENT = "SENT"
     FAILED = "FAILED"
     MANUAL_REVIEW = "MANUAL_REVIEW"
+    CANCELLED = "CANCELLED"
 
 
 class ContaMae(SQLModel, table=True):
@@ -90,6 +91,10 @@ class ContaMaeInviteJob(SQLModel, table=True):
     started_at: Optional[datetime.datetime] = Field(default=None, nullable=True)
     finished_at: Optional[datetime.datetime] = Field(default=None, nullable=True)
     next_retry_at: Optional[datetime.datetime] = Field(default=None, nullable=True, index=True)
+    resolved_manually: bool = Field(default=False, nullable=False)
+    manual_resolution_at: Optional[datetime.datetime] = Field(default=None, nullable=True)
+    manual_resolution_note: Optional[str] = Field(default=None, nullable=True, max_length=500)
+    cancelled_at: Optional[datetime.datetime] = Field(default=None, nullable=True)
     created_at: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False, index=True)
     updated_at: datetime.datetime = Field(
         default_factory=datetime.datetime.utcnow,
