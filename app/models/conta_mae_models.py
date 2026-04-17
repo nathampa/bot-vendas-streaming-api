@@ -15,6 +15,7 @@ class ContaMaeInviteJobStatus(str, enum.Enum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
     WAITING_OTP = "WAITING_OTP"
+    RETRY_WAIT = "RETRY_WAIT"
     SENT = "SENT"
     FAILED = "FAILED"
     MANUAL_REVIEW = "MANUAL_REVIEW"
@@ -88,6 +89,7 @@ class ContaMaeInviteJob(SQLModel, table=True):
     locked_at: Optional[datetime.datetime] = Field(default=None, nullable=True, index=True)
     started_at: Optional[datetime.datetime] = Field(default=None, nullable=True)
     finished_at: Optional[datetime.datetime] = Field(default=None, nullable=True)
+    next_retry_at: Optional[datetime.datetime] = Field(default=None, nullable=True, index=True)
     created_at: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False, index=True)
     updated_at: datetime.datetime = Field(
         default_factory=datetime.datetime.utcnow,

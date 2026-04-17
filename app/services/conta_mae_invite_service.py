@@ -196,6 +196,7 @@ def job_result_payload(job: ContaMaeInviteJob) -> dict:
         "auth_path_used": job.auth_path_used,
         "auth_step_failed": job.auth_step_failed,
         "evidence_path": job.evidence_path,
+        "next_retry_at": job.next_retry_at.isoformat() if job.next_retry_at else None,
     }
 
 
@@ -215,9 +216,43 @@ def job_to_schema_payload(job: ContaMaeInviteJob) -> dict:
         "locked_at": job.locked_at,
         "started_at": job.started_at,
         "finished_at": job.finished_at,
+        "next_retry_at": job.next_retry_at,
         "created_at": job.created_at,
         "updated_at": job.updated_at,
     }
+
+
+def invite_retry_cooldowns_seconds() -> list[int]:
+    values: list[int] = []
+    raw = settings.OPENAI_INVITE_RETRY_COOLDOWNS_SECONDS
+    for piece in raw.split(","):
+        piece = piece.strip()
+        if not piece:
+            continue
+        try:
+            parsed = int(piece)
+        except ValueError:
+            continue
+        if parsed > 0:
+            values.append(parsed)
+    return values or [300, 600, 900, 1200, 1800]
+
+
+def compute_retry_cooldown_seconds(attempt_count: int) -> int:
+    cooldowns = invite_retry_cooldowns_seconds()
+    index = max(0, attempt_count - 1)
+    if index >= len(cooldowns):
+        return cooldowns[-1]
+    return cooldowns[index]
+
+
+def invite_retry_deadline(job: ContaMaeInviteJob) -> datetime.datetime:
+    return job.created_at + datetime.timedelta(seconds=settings.OPENAI_INVITE_RETRY_WINDOW_SECONDS)
+
+
+def challenge_retryable(message: str | None) -> bool:
+    lowered = (message or "").lower()
+    return any(token in lowered for token in ("captcha", "challenge", "cloudflare", "verify you are human"))
 
 
 def create_invite_job_for_convite(session: Session, convite: ContaMaeConvite) -> ContaMaeInviteJob:
@@ -254,20 +289,34 @@ def enqueue_invite_job(
     job_id: uuid.UUID,
     *,
     background_tasks: Optional[BackgroundTasks] = None,
+    countdown_seconds: int | None = None,
 ) -> None:
     if not settings.OPENAI_INVITE_AUTOMATION_ENABLED:
         return
     if settings.CELERY_BROKER_URL:
         from app.worker.celery_app import celery_app
 
-        celery_app.send_task("process_conta_mae_invite_job", args=[str(job_id)])
+        kwargs = {}
+        if countdown_seconds and countdown_seconds > 0:
+            kwargs["countdown"] = countdown_seconds
+        celery_app.send_task("process_conta_mae_invite_job", args=[str(job_id)], **kwargs)
         return
     if background_tasks is not None:
-        background_tasks.add_task(process_invite_job_task, str(job_id))
+        if countdown_seconds and countdown_seconds > 0:
+            def delayed_task():
+                time.sleep(countdown_seconds)
+                process_invite_job_task(str(job_id))
+            background_tasks.add_task(delayed_task)
+        else:
+            background_tasks.add_task(process_invite_job_task, str(job_id))
         return
+    def thread_target():
+        if countdown_seconds and countdown_seconds > 0:
+            time.sleep(countdown_seconds)
+        process_invite_job_task(str(job_id))
+
     threading.Thread(
-        target=process_invite_job_task,
-        args=(str(job_id),),
+        target=thread_target,
         daemon=True,
         name=f"openai-invite-{job_id}",
     ).start()
@@ -282,6 +331,7 @@ def retry_invite_job(session: Session, job: ContaMaeInviteJob) -> ContaMaeInvite
     job.locked_at = None
     job.started_at = None
     job.finished_at = None
+    job.next_retry_at = None
     session.add(job)
     session.flush()
     return job
@@ -1143,7 +1193,78 @@ def notify_invite_job_admin_failure(
         pedido_id=str(job.pedido_id) if job.pedido_id else None,
         produto_nome=produto.nome if produto else None,
         motivo=job.last_error,
+        attempt_count=job.attempt_count,
+        next_retry_at=job.next_retry_at.isoformat() if job.next_retry_at else None,
     )
+
+
+def schedule_retry_or_manual_review(
+    session: Session,
+    job: ContaMaeInviteJob,
+    conta_mae: ContaMae,
+    *,
+    error_message: str,
+) -> dict:
+    now = utcnow()
+    deadline = invite_retry_deadline(job)
+    remaining_seconds = int((deadline - now).total_seconds())
+
+    if remaining_seconds <= 0:
+        job.status = ContaMaeInviteJobStatus.MANUAL_REVIEW
+        job.last_error = error_message
+        job.evidence_path = job.evidence_path or str(build_evidence_dir(job))
+        job.finished_at = now
+        job.locked_at = None
+        job.next_retry_at = None
+        conta_mae.ultimo_erro_automacao = job.last_error
+        session.add(job)
+        session.add(conta_mae)
+        session.commit()
+        session.refresh(job)
+        try:
+            notify_invite_job_admin_failure(session, job, conta_mae)
+        except Exception as exc_notify:
+            print(f"AVISO: falha ao alertar admin do convite {job.id}: {exc_notify}")
+        return job_result_payload(job)
+
+    cooldown_seconds = min(compute_retry_cooldown_seconds(job.attempt_count), remaining_seconds)
+    next_retry = now + datetime.timedelta(seconds=cooldown_seconds)
+    job.status = ContaMaeInviteJobStatus.RETRY_WAIT
+    job.last_error = error_message
+    job.evidence_path = job.evidence_path or str(build_evidence_dir(job))
+    job.finished_at = None
+    job.locked_at = None
+    job.next_retry_at = next_retry
+    conta_mae.ultimo_erro_automacao = job.last_error
+    session.add(job)
+    session.add(conta_mae)
+    session.commit()
+    session.refresh(job)
+    try:
+        notify_invite_job_admin_failure(session, job, conta_mae)
+    except Exception as exc_notify:
+        print(f"AVISO: falha ao alertar admin do convite {job.id}: {exc_notify}")
+    try:
+        enqueue_invite_job(job.id, countdown_seconds=cooldown_seconds)
+    except Exception as exc_enqueue:
+        print(f"AVISO: falha ao agendar retry do convite {job.id}: {exc_enqueue}")
+        job = session.get(ContaMaeInviteJob, job.id)
+        conta_mae = session.get(ContaMae, conta_mae.id)
+        if job and conta_mae:
+            job.status = ContaMaeInviteJobStatus.MANUAL_REVIEW
+            job.last_error = f"{error_message} | Falha ao agendar retry: {exc_enqueue}"
+            job.next_retry_at = None
+            job.finished_at = utcnow()
+            conta_mae.ultimo_erro_automacao = job.last_error
+            session.add(job)
+            session.add(conta_mae)
+            session.commit()
+            session.refresh(job)
+            try:
+                notify_invite_job_admin_failure(session, job, conta_mae)
+            except Exception as exc_notify:
+                print(f"AVISO: falha ao alertar admin do convite {job.id}: {exc_notify}")
+    return job_result_payload(job)
 
 
 def process_invite_job(job_id: uuid.UUID) -> dict:
@@ -1152,6 +1273,12 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
         if not job:
             raise InviteAutomationError(f"Job {job_id} não encontrado.")
         if job.status == ContaMaeInviteJobStatus.SENT:
+            return job_result_payload(job)
+        if (
+            job.status == ContaMaeInviteJobStatus.RETRY_WAIT
+            and job.next_retry_at
+            and job.next_retry_at > utcnow()
+        ):
             return job_result_payload(job)
 
         conta_mae = session.get(ContaMae, job.conta_mae_id)
@@ -1168,6 +1295,7 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
         job.locked_at = now
         job.started_at = now
         job.finished_at = None
+        job.next_retry_at = None
         job.attempt_count += 1
         job.last_error = None
         session.add(job)
@@ -1190,6 +1318,7 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
             )
             refreshed_job.finished_at = utcnow()
             refreshed_job.locked_at = None
+            refreshed_job.next_retry_at = None
             refreshed_conta.ultimo_convite_sucesso_em = refreshed_job.finished_at
             refreshed_conta.ultimo_login_automatizado_em = refreshed_job.finished_at
             refreshed_conta.session_storage_path = build_session_path(refreshed_conta)
@@ -1216,6 +1345,7 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
             refreshed_job.evidence_path = str(build_evidence_dir(refreshed_job))
             refreshed_job.finished_at = utcnow()
             refreshed_job.locked_at = None
+            refreshed_job.next_retry_at = None
             refreshed_conta.ultimo_erro_automacao = refreshed_job.last_error
             session.add(refreshed_job)
             session.add(refreshed_conta)
@@ -1227,6 +1357,17 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
                 print(f"AVISO: falha ao alertar admin do convite {refreshed_job.id}: {exc_notify}")
             return job_result_payload(refreshed_job)
         except ManualReviewRequired as exc:
+            if challenge_retryable(str(exc)):
+                refreshed_job = session.get(ContaMaeInviteJob, job_id)
+                refreshed_conta = session.get(ContaMae, conta_mae.id)
+                if not refreshed_job or not refreshed_conta:
+                    raise InviteAutomationError("Job ou conta-mãe indisponível ao agendar retry.")
+                return schedule_retry_or_manual_review(
+                    session,
+                    refreshed_job,
+                    refreshed_conta,
+                    error_message=str(exc),
+                )
             refreshed_job = session.get(ContaMaeInviteJob, job_id)
             refreshed_conta = session.get(ContaMae, conta_mae.id)
             refreshed_job.status = ContaMaeInviteJobStatus.MANUAL_REVIEW
@@ -1234,6 +1375,7 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
             refreshed_job.evidence_path = str(build_evidence_dir(refreshed_job))
             refreshed_job.finished_at = utcnow()
             refreshed_job.locked_at = None
+            refreshed_job.next_retry_at = None
             refreshed_conta.ultimo_erro_automacao = refreshed_job.last_error
             session.add(refreshed_job)
             session.add(refreshed_conta)
@@ -1245,6 +1387,17 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
                 print(f"AVISO: falha ao alertar admin do convite {refreshed_job.id}: {exc_notify}")
             return job_result_payload(refreshed_job)
         except (InviteAutomationError, PlaywrightTimeoutError) as exc:
+            if challenge_retryable(str(exc)):
+                refreshed_job = session.get(ContaMaeInviteJob, job_id)
+                refreshed_conta = session.get(ContaMae, conta_mae.id)
+                if not refreshed_job or not refreshed_conta:
+                    raise InviteAutomationError("Job ou conta-mãe indisponível ao agendar retry.")
+                return schedule_retry_or_manual_review(
+                    session,
+                    refreshed_job,
+                    refreshed_conta,
+                    error_message=str(exc),
+                )
             refreshed_job = session.get(ContaMaeInviteJob, job_id)
             refreshed_conta = session.get(ContaMae, conta_mae.id)
             refreshed_job.status = ContaMaeInviteJobStatus.FAILED
@@ -1252,6 +1405,7 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
             refreshed_job.evidence_path = str(build_evidence_dir(refreshed_job))
             refreshed_job.finished_at = utcnow()
             refreshed_job.locked_at = None
+            refreshed_job.next_retry_at = None
             refreshed_conta.ultimo_erro_automacao = refreshed_job.last_error
             session.add(refreshed_job)
             session.add(refreshed_conta)

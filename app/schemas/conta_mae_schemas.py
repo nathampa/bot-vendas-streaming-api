@@ -52,6 +52,7 @@ class ContaMaeInviteJobRead(SQLModel):
     locked_at: Optional[datetime.datetime] = None
     started_at: Optional[datetime.datetime] = None
     finished_at: Optional[datetime.datetime] = None
+    next_retry_at: Optional[datetime.datetime] = None
     created_at: datetime.datetime
     updated_at: datetime.datetime
 

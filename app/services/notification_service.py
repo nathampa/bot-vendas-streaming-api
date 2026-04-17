@@ -82,6 +82,8 @@ def send_openai_invite_failure_admin_alert(
     pedido_id: str | None = None,
     produto_nome: str | None = None,
     motivo: str | None = None,
+    attempt_count: int | None = None,
+    next_retry_at: str | None = None,
 ):
     admin_id = settings.ADMIN_TELEGRAM_ID
     if not admin_id:
@@ -95,6 +97,12 @@ def send_openai_invite_failure_admin_alert(
     pedido_f = escape_markdown_v2(pedido_id) if pedido_id else "N/A"
     produto_f = escape_markdown_v2(produto_nome) if produto_nome else "Produto nao identificado"
     motivo_f = escape_markdown_v2((motivo or "Falha sem detalhe.").strip())
+    tentativa_block = ""
+    if attempt_count is not None:
+        tentativa_block += f"\nTentativa: *{attempt_count}*"
+    if next_retry_at:
+        retry_f = escape_markdown_v2(next_retry_at)
+        tentativa_block += f"\nProxima tentativa: `{retry_f}`"
 
     message = (
         "🚨 *Falha no envio automatico de convite*"
@@ -104,6 +112,7 @@ def send_openai_invite_failure_admin_alert(
         f"\nEmail do cliente: `{email_f}`"
         f"\nPedido: `{pedido_f}`"
         f"\nJob: `{job_id_f}`"
+        f"{tentativa_block}"
         f"\n\nMotivo:\n{motivo_f}"
     )
     send_telegram_message(telegram_id=admin_id, message_text=message)
