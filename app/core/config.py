@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     OPENAI_INVITE_MEMBERS_URL: str = "https://chatgpt.com/admin"
     OPENAI_INVITE_SESSION_ROOT: str = "/opt/bot-vendas/runtime/openai-invite-sessions"
     OPENAI_INVITE_EVIDENCE_ROOT: str = "/opt/bot-vendas/runtime/openai-invite-evidence"
+    OPENAI_INVITE_VIRTUAL_DISPLAY_ENABLED: bool = True
+    OPENAI_INVITE_VIRTUAL_DISPLAY_WIDTH: int = 1440
+    OPENAI_INVITE_VIRTUAL_DISPLAY_HEIGHT: int = 960
+    OPENAI_INVITE_VIRTUAL_DISPLAY_COLOR_DEPTH: int = 24
+    OPENAI_INVITE_XVFB_START_TIMEOUT_SECONDS: int = 5
     OPENAI_INVITE_HEADLESS: bool = True
     OPENAI_INVITE_PAGE_TIMEOUT_MS: int = 30000
     OPENAI_INVITE_OTP_TIMEOUT_SECONDS: int = 120

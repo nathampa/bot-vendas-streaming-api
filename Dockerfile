@@ -1,6 +1,8 @@
 FROM python:3.11-slim
 
 WORKDIR /app
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV HOME=/tmp
 
 # requirements.txt do seu projeto está em UTF-16LE (com BOM).
 # Convertemos para UTF-8 antes de instalar.

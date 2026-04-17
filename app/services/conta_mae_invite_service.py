@@ -1,10 +1,14 @@
 import datetime
 import email
+import os
 import re
 import shlex
+import shutil
+import subprocess
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
@@ -430,12 +434,162 @@ def goto_openai_members(page) -> None:
     page.wait_for_timeout(1500)
 
 
+def browser_viewport() -> dict[str, int]:
+    return {
+        "width": settings.OPENAI_INVITE_VIRTUAL_DISPLAY_WIDTH,
+        "height": settings.OPENAI_INVITE_VIRTUAL_DISPLAY_HEIGHT,
+    }
+
+
+def browser_launch_args() -> list[str]:
+    return [
+        "--disable-gpu",
+        "--use-gl=swiftshader",
+        "--ozone-platform=x11",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+
+
+def should_fallback_to_headless(exc: Exception) -> bool:
+    lowered = str(exc).lower()
+    return (
+        "target page, context or browser has been closed" in lowered
+        or "sigtrap" in lowered
+        or "browser has been closed" in lowered
+    )
+
+
+def next_virtual_display() -> str:
+    for display_number in range(90, 110):
+        socket_path = Path(f"/tmp/.X11-unix/X{display_number}")
+        if not socket_path.exists():
+            return f":{display_number}"
+    raise InviteAutomationError("Nao foi possivel reservar um display virtual livre para a automacao.")
+
+
+def wait_for_virtual_display(display: str, process: subprocess.Popen) -> None:
+    socket_path = Path(f"/tmp/.X11-unix/X{display.removeprefix(':')}")
+    deadline = time.time() + settings.OPENAI_INVITE_XVFB_START_TIMEOUT_SECONDS
+    while time.time() < deadline:
+        if process.poll() is not None:
+            raise InviteAutomationError("O Xvfb encerrou antes de disponibilizar o display virtual.")
+        if socket_path.exists():
+            return
+        time.sleep(0.1)
+    raise InviteAutomationError("Tempo esgotado ao iniciar o display virtual da automacao.")
+
+
+@contextmanager
+def maybe_virtual_display():
+    if not settings.OPENAI_INVITE_VIRTUAL_DISPLAY_ENABLED:
+        yield None
+        return
+
+    xvfb_binary = shutil.which("Xvfb")
+    if not xvfb_binary:
+        raise InviteAutomationError("Xvfb nao esta disponivel no ambiente da API para automacao headful.")
+
+    display = next_virtual_display()
+    process = subprocess.Popen(
+        [
+            xvfb_binary,
+            display,
+            "-screen",
+            "0",
+            (
+                f"{settings.OPENAI_INVITE_VIRTUAL_DISPLAY_WIDTH}"
+                f"x{settings.OPENAI_INVITE_VIRTUAL_DISPLAY_HEIGHT}"
+                f"x{settings.OPENAI_INVITE_VIRTUAL_DISPLAY_COLOR_DEPTH}"
+            ),
+            "-nolisten",
+            "tcp",
+            "-ac",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        wait_for_virtual_display(display, process)
+        yield display
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=3)
+
+
+def playwright_launch_env(display: Optional[str]) -> Optional[dict[str, str]]:
+    if not display:
+        return None
+    env = dict(os.environ)
+    env["DISPLAY"] = display
+    env.setdefault("HOME", "/tmp")
+    return env
+
+
+def launch_browser_context(playwright, session_path: Path, *, headless: bool, display: Optional[str]):
+    launch_kwargs = {
+        "user_data_dir": str(session_path),
+        "headless": headless,
+        "viewport": browser_viewport(),
+        "args": browser_launch_args(),
+    }
+    env = playwright_launch_env(display)
+    if env:
+        launch_kwargs["env"] = env
+    return playwright.chromium.launch_persistent_context(**launch_kwargs)
+
+
+@contextmanager
+def launch_conta_mae_browser_context(playwright, session_path: Path):
+    if settings.OPENAI_INVITE_VIRTUAL_DISPLAY_ENABLED:
+        try:
+            with maybe_virtual_display() as display:
+                context = launch_browser_context(
+                    playwright,
+                    session_path,
+                    headless=False,
+                    display=display,
+                )
+                try:
+                    yield context
+                    return
+                finally:
+                    context.close()
+        except Exception as exc:
+            if not should_fallback_to_headless(exc):
+                raise
+
+    context = launch_browser_context(
+        playwright,
+        session_path,
+        headless=True if settings.OPENAI_INVITE_VIRTUAL_DISPLAY_ENABLED else settings.OPENAI_INVITE_HEADLESS,
+        display=None,
+    )
+    try:
+        yield context
+    finally:
+        context.close()
+
+
 def build_manual_session_launch_command(conta_mae: ContaMae) -> str:
     session_path = build_session_path(conta_mae)
-    return (
-        f"google-chrome --user-data-dir={shlex.quote(session_path)} "
-        f"--new-window {shlex.quote(settings.OPENAI_INVITE_MEMBERS_URL)}"
-    )
+    flags = [
+        "google-chrome",
+        "--disable-gpu",
+        "--use-gl=swiftshader",
+        "--ozone-platform=x11",
+        "--no-first-run",
+        "--no-default-browser-check",
+        f"--user-data-dir={shlex.quote(session_path)}",
+        "--new-window",
+        shlex.quote(settings.OPENAI_INVITE_MEMBERS_URL),
+    ]
+    return " ".join(flags)
 
 
 def prepare_conta_mae_session(conta_mae: ContaMae) -> dict:
@@ -471,11 +625,8 @@ def test_conta_mae_session(conta_mae: ContaMae) -> dict:
     try:
         with sync_playwright() as playwright:
             try:
-                context = playwright.chromium.launch_persistent_context(
-                    user_data_dir=str(session_path),
-                    headless=True,
-                    viewport={"width": 1440, "height": 960},
-                )
+                context_manager = launch_conta_mae_browser_context(playwright, session_path)
+                context = context_manager.__enter__()
             except Exception as exc:
                 lowered = str(exc).lower()
                 profile_in_use = "singleton" in lowered or "in use" in lowered
@@ -560,7 +711,7 @@ def test_conta_mae_session(conta_mae: ContaMae) -> dict:
                     "evidence_path": None,
                 }
             finally:
-                context.close()
+                context_manager.__exit__(None, None, None)
     except Exception as exc:
         return {
             "conta_mae_id": conta_mae.id,
@@ -669,11 +820,8 @@ def run_invite_automation(session: Session, job: ContaMaeInviteJob, conta_mae: C
     session_path.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as playwright:
-        context = playwright.chromium.launch_persistent_context(
-            user_data_dir=str(session_path),
-            headless=settings.OPENAI_INVITE_HEADLESS,
-            viewport={"width": 1440, "height": 960},
-        )
+        context_manager = launch_conta_mae_browser_context(playwright, session_path)
+        context = context_manager.__enter__()
         try:
             context.set_default_timeout(settings.OPENAI_INVITE_PAGE_TIMEOUT_MS)
             page = context.pages[0] if context.pages else context.new_page()
@@ -681,7 +829,7 @@ def run_invite_automation(session: Session, job: ContaMaeInviteJob, conta_mae: C
             send_invite(page, job, evidence_dir)
             return auth_path
         finally:
-            context.close()
+            context_manager.__exit__(None, None, None)
 
 
 def process_invite_job(job_id: uuid.UUID) -> dict:
