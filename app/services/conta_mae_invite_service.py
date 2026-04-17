@@ -1,5 +1,6 @@
 import datetime
 import email
+import html
 import json
 import os
 import re
@@ -109,6 +110,7 @@ CHALLENGE_TEXT_HINTS = (
 GENERIC_WORKSPACE_TEXTS = {
     "chatgpt",
     "admin",
+    "back to chat",
     "members",
     "users",
     "settings",
@@ -119,6 +121,19 @@ GENERIC_WORKSPACE_TEXTS = {
     "invite members",
     "pending invites",
 }
+GENERIC_WORKSPACE_TEXT_TOKENS = (
+    "workspace settings",
+    "permissions & roles",
+    "workspace analytics",
+    "identity & access",
+)
+WORKSPACE_NAME_PATTERNS = (
+    re.compile(r"invite members? to the (?P<name>.+?) workspace", re.IGNORECASE),
+)
+WORKSPACE_NAME_HTML_PATTERNS = (
+    re.compile(r'"workspaceName","(?P<name>[^"]+)"', re.IGNORECASE),
+    re.compile(r'"workspaceName"\s*:\s*"(?P<name>[^"]+)"', re.IGNORECASE),
+)
 
 
 def utcnow() -> datetime.datetime:
@@ -566,6 +581,11 @@ def normalize_workspace_name(raw_value: str | None) -> str | None:
     if not raw_value:
         return None
     value = re.sub(r"\s+", " ", raw_value).strip(" -|:\n\t")
+    for pattern in WORKSPACE_NAME_PATTERNS:
+        match = pattern.search(value)
+        if match:
+            value = match.group("name").strip(" -|:\n\t")
+            break
     if not value or len(value) > 80:
         return None
     lowered = value.lower()
@@ -575,9 +595,24 @@ def normalize_workspace_name(raw_value: str | None) -> str | None:
         return None
     if "@" in value:
         return None
-    if any(token in lowered for token in ("invite member", "pending invites", "workspace settings")):
+    if any(token in lowered for token in GENERIC_WORKSPACE_TEXT_TOKENS):
+        return None
+    if any(token in lowered for token in ("invite member", "pending invites")):
         return None
     return value
+
+
+def extract_workspace_name_from_html(html_content: str | None) -> str | None:
+    if not html_content:
+        return None
+    for pattern in WORKSPACE_NAME_HTML_PATTERNS:
+        match = pattern.search(html_content)
+        if not match:
+            continue
+        candidate = normalize_workspace_name(html.unescape(match.group("name")))
+        if candidate:
+            return candidate
+    return None
 
 
 def extract_workspace_name(page) -> str | None:
@@ -589,6 +624,9 @@ def extract_workspace_name(page) -> str | None:
         pass
 
     selector_candidates = [
+        '[data-testid="modal-invite-users-to-workspace"] h2',
+        "nav h2",
+        "h2",
         '[data-testid*="workspace"]',
         '[aria-label*="workspace" i]',
         '[id*="workspace" i]',
@@ -610,6 +648,13 @@ def extract_workspace_name(page) -> str | None:
             candidate = normalize_workspace_name(buttons.nth(index).inner_text(timeout=300))
             if candidate:
                 return candidate
+    except Exception:
+        pass
+
+    try:
+        candidate = extract_workspace_name_from_html(page.content())
+        if candidate:
+            return candidate
     except Exception:
         pass
     return None
