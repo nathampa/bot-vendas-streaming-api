@@ -285,6 +285,10 @@ def challenge_retryable(message: str | None) -> bool:
     return any(token in lowered for token in ("captcha", "challenge", "cloudflare", "verify you are human"))
 
 
+def produto_supports_openai_invite_automation(produto: Optional[Produto]) -> bool:
+    return bool(produto and produto.uses_openai_invite_automation())
+
+
 def create_invite_job_for_convite(session: Session, convite: ContaMaeConvite) -> ContaMaeInviteJob:
     existing = session.exec(
         select(ContaMaeInviteJob).where(ContaMaeInviteJob.convite_id == convite.id)
@@ -1319,6 +1323,12 @@ def notify_invite_job_sent(
     if not usuario or not usuario.telegram_id:
         return
     produto = session.get(Produto, pedido.produto_id) if pedido.produto_id else None
+    if not produto_supports_openai_invite_automation(produto):
+        print(
+            "AVISO: notificação de convite OpenAI ignorada para job "
+            f"{job.id} porque o produto não usa automação OPENAI."
+        )
+        return
     produto_nome = produto.nome if produto else "seu produto"
     send_openai_invite_sent_message(
         telegram_id=usuario.telegram_id,
@@ -1439,6 +1449,20 @@ def process_invite_job(job_id: uuid.UUID) -> dict:
             job.status = ContaMaeInviteJobStatus.FAILED
             job.last_error = "Conta-mãe não encontrada para o job."
             session.add(job)
+            session.commit()
+            session.refresh(job)
+            return job_result_payload(job)
+        produto = session.get(Produto, conta_mae.produto_id)
+        if not produto_supports_openai_invite_automation(produto):
+            job.status = ContaMaeInviteJobStatus.MANUAL_REVIEW
+            job.last_error = "Automação OpenAI desabilitada para o produto desta conta-mãe."
+            job.finished_at = utcnow()
+            job.locked_at = None
+            job.next_retry_at = None
+            job.evidence_path = job.evidence_path or str(build_evidence_dir(job))
+            conta_mae.ultimo_erro_automacao = job.last_error
+            session.add(job)
+            session.add(conta_mae)
             session.commit()
             session.refresh(job)
             return job_result_payload(job)

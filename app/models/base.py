@@ -34,6 +34,10 @@ class TipoEntregaProduto(str, enum.Enum):
     SOLICITA_EMAIL = "SOLICITA_EMAIL"
     MANUAL_ADMIN = "MANUAL_ADMIN"
 
+class InviteProviderProduto(str, enum.Enum):
+    NONE = "NONE"
+    OPENAI = "OPENAI"
+
 class StatusEntregaPedido(str, enum.Enum):
     ENTREGUE = "ENTREGUE"
     PENDENTE = "PENDENTE"

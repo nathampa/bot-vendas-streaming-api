@@ -168,11 +168,18 @@ def create_compra_com_saldo(
                 login_entrega = None
                 senha_entrega = None
                 instrucao_customizada = produto.instrucoes_pos_compra or "A entrega é manual e pode levar alguns minutos."
-                mensagem_entrega = (
-                    f"O convite será enviado para o email:\n"
-                    f"`{compra_in.email_cliente}`\n\n"
-                    f"**Instruções:**\n{instrucao_customizada}"
-                )
+                if produto.uses_openai_invite_automation():
+                    mensagem_entrega = (
+                        f"O convite será enviado para o email:\n"
+                        f"`{compra_in.email_cliente}`\n\n"
+                        f"**Instruções:**\n{instrucao_customizada}"
+                    )
+                else:
+                    mensagem_entrega = (
+                        f"O email informado foi registrado para a entrega:\n"
+                        f"`{compra_in.email_cliente}`\n\n"
+                        f"**Instruções:**\n{instrucao_customizada}"
+                    )
                 status_entrega_pedido = StatusEntregaPedido.ENTREGUE
 
             case TipoEntregaProduto.MANUAL_ADMIN:
@@ -203,7 +210,11 @@ def create_compra_com_saldo(
         session.flush()
 
         invite_job_id = None
-        if conta_mae_para_alocar_id and compra_in.email_cliente:
+        if (
+            conta_mae_para_alocar_id
+            and compra_in.email_cliente
+            and produto.uses_openai_invite_automation()
+        ):
             convite = ContaMaeConvite(
                 conta_mae_id=conta_mae_para_alocar_id,
                 pedido_id=novo_pedido.id,

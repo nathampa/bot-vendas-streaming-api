@@ -49,6 +49,21 @@ ACTIVE_INVITE_JOB_STATUSES = (
 )
 
 
+def _get_conta_mae_produto_or_404(session: Session, conta: ContaMae) -> Produto:
+    produto = session.get(Produto, conta.produto_id)
+    if not produto:
+        raise HTTPException(status_code=404, detail="Produto da conta mãe não encontrado")
+    return produto
+
+
+def _ensure_openai_invite_provider(produto: Produto) -> None:
+    if not produto.uses_openai_invite_automation():
+        raise HTTPException(
+            status_code=400,
+            detail="Sessão OpenAI só está disponível para produtos com automação OPENAI.",
+        )
+
+
 def _convites_count_and_emails(session: Session) -> tuple[dict[uuid.UUID, int], dict[uuid.UUID, set[str]]]:
     convite_rows = session.exec(
         select(ContaMaeConvite.conta_mae_id, ContaMaeConvite.email_cliente)
@@ -308,6 +323,8 @@ def prepare_conta_mae_openai_session(
     conta = session.get(ContaMae, conta_mae_id)
     if not conta:
         raise HTTPException(status_code=404, detail="Conta mãe não encontrada")
+    produto = _get_conta_mae_produto_or_404(session, conta)
+    _ensure_openai_invite_provider(produto)
 
     payload = prepare_conta_mae_session(conta)
     session.add(conta)
@@ -325,6 +342,8 @@ def test_conta_mae_openai_session(
     conta = session.get(ContaMae, conta_mae_id)
     if not conta:
         raise HTTPException(status_code=404, detail="Conta mãe não encontrada")
+    produto = _get_conta_mae_produto_or_404(session, conta)
+    _ensure_openai_invite_provider(produto)
 
     payload = test_conta_mae_session(conta)
     return ContaMaeSessionTestResponse(**payload)
@@ -427,22 +446,22 @@ def add_convite_conta_mae(
     if conta.slots_ocupados >= conta.max_slots:
         raise HTTPException(status_code=409, detail="Conta mãe sem slots disponíveis.")
 
+    produto = _get_conta_mae_produto_or_404(session, conta)
     convite = ContaMaeConvite(conta_mae_id=conta_mae_id, email_cliente=email_cliente)
     conta.slots_ocupados += 1
     inativar_conta_mae_se_lotada(conta)
     session.add(conta)
-    produto = session.get(Produto, conta.produto_id)
-    if produto:
-        sincronizar_status_produto_por_disponibilidade(session, produto)
+    sincronizar_status_produto_por_disponibilidade(session, produto)
     session.add(convite)
     session.flush()
-    job = create_invite_job_for_convite(session, convite)
+    job = create_invite_job_for_convite(session, convite) if produto.uses_openai_invite_automation() else None
     session.commit()
     session.refresh(convite)
-    try:
-        enqueue_invite_job(job.id, background_tasks=background_tasks)
-    except Exception as exc:
-        print(f"AVISO: falha ao enfileirar job de convite {job.id}: {exc}")
+    if job:
+        try:
+            enqueue_invite_job(job.id, background_tasks=background_tasks)
+        except Exception as exc:
+            print(f"AVISO: falha ao enfileirar job de convite {job.id}: {exc}")
 
     return ContaMaeConviteRead(
         id=convite.id,

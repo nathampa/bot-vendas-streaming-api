@@ -3,7 +3,7 @@ import datetime
 from decimal import Decimal
 from typing import Optional, List
 from sqlmodel import Field, SQLModel, Relationship
-from app.models.base import TipoEntregaProduto
+from app.models.base import InviteProviderProduto, TipoEntregaProduto
 import sqlalchemy as sa
 
 from typing import TYPE_CHECKING
@@ -23,12 +23,22 @@ class Produto(SQLModel, table=True):
         default=TipoEntregaProduto.AUTOMATICA, 
         nullable=False
     )
+    invite_provider: InviteProviderProduto = Field(
+        default=InviteProviderProduto.NONE,
+        sa_column=sa.Column(sa.Enum(InviteProviderProduto, name="invite_provider_produto"), nullable=False),
+    )
     criado_em: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)
     atualizado_em: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False, sa_column_kwargs={"onupdate": datetime.datetime.utcnow})
     
     contas_estoque: List["EstoqueConta"] = Relationship(back_populates="produto")
     contas_mae: List["ContaMae"] = Relationship(back_populates="produto")
     pedidos: List["Pedido"] = Relationship(back_populates="produto")
+
+    def uses_openai_invite_automation(self) -> bool:
+        return (
+            self.tipo_entrega == TipoEntregaProduto.SOLICITA_EMAIL
+            and self.invite_provider == InviteProviderProduto.OPENAI
+        )
 
 class EstoqueConta(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)

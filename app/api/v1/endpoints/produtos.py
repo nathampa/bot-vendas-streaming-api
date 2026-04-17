@@ -5,6 +5,7 @@ from sqlmodel import Session, select, desc
 from typing import List
 
 from app.db.database import get_session
+from app.models.base import InviteProviderProduto, TipoEntregaProduto
 from app.models.usuario_models import Usuario
 from app.models.produto_models import Produto
 from app.schemas.produto_schemas import (
@@ -42,6 +43,18 @@ def get_produtos_ativos(session: Session = Depends(get_session)):
 # ===============================================================
 admin_router = APIRouter()
 
+
+def _validate_invite_provider(
+    *,
+    tipo_entrega: TipoEntregaProduto,
+    invite_provider: InviteProviderProduto,
+) -> None:
+    if invite_provider != InviteProviderProduto.NONE and tipo_entrega != TipoEntregaProduto.SOLICITA_EMAIL:
+        raise HTTPException(
+            status_code=400,
+            detail="Automação de convite só pode ser usada em produtos com tipo de entrega SOLICITA_EMAIL.",
+        )
+
 @admin_router.post(
     "/",
     response_model=ProdutoAdminRead,
@@ -56,6 +69,10 @@ def create_produto(
     """
     [ADMIN] Cria um novo produto no catálogo.
     """
+    _validate_invite_provider(
+        tipo_entrega=produto_in.tipo_entrega,
+        invite_provider=produto_in.invite_provider,
+    )
     produto = Produto.model_validate(produto_in)
     session.add(produto)
     session.commit()
@@ -98,6 +115,10 @@ def update_produto(
         raise HTTPException(status_code=404, detail="Produto não encontrado")
         
     update_data = produto_in.model_dump(exclude_unset=True)
+    _validate_invite_provider(
+        tipo_entrega=update_data.get("tipo_entrega", produto.tipo_entrega),
+        invite_provider=update_data.get("invite_provider", produto.invite_provider),
+    )
     produto.sqlmodel_update(update_data)
     
     session.add(produto)
