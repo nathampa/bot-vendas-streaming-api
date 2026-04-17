@@ -2,6 +2,7 @@
 
 import argparse
 import email
+import html
 import imaplib
 import json
 import os
@@ -67,9 +68,12 @@ CHALLENGE_TEXT_HINTS = (
     "cf-turnstile",
     "challenge-platform",
 )
+CHALLENGE_STABILIZATION_ATTEMPTS = 4
+CHALLENGE_STABILIZATION_WAIT_MS = 3000
 GENERIC_WORKSPACE_TEXTS = {
     "chatgpt",
     "admin",
+    "back to chat",
     "members",
     "users",
     "settings",
@@ -80,6 +84,21 @@ GENERIC_WORKSPACE_TEXTS = {
     "invite members",
     "pending invites",
 }
+GENERIC_WORKSPACE_TEXT_TOKENS = (
+    "workspace settings",
+    "permissions & roles",
+    "workspace analytics",
+    "identity & access",
+)
+WORKSPACE_NAME_PATTERNS = (
+    re.compile(r"invite members? to the (?P<name>.+?) workspace", re.IGNORECASE),
+)
+WORKSPACE_NAME_HTML_PATTERNS = (
+    re.compile(r'"workspaceName","(?P<name>[^"]+)"', re.IGNORECASE),
+    re.compile(r'\\"workspaceName\\",\\"(?P<name>[^\\"]+)\\"', re.IGNORECASE),
+    re.compile(r'"workspaceName"\s*:\s*"(?P<name>[^"]+)"', re.IGNORECASE),
+    re.compile(r'\\"workspaceName\\"\s*:\s*\\"(?P<name>[^\\"]+)\\"', re.IGNORECASE),
+)
 
 
 class HostRunnerError(Exception):
@@ -164,6 +183,11 @@ def normalize_workspace_name(raw_value: str | None) -> str | None:
     if not raw_value:
         return None
     value = re.sub(r"\s+", " ", raw_value).strip(" -|:\n\t")
+    for pattern in WORKSPACE_NAME_PATTERNS:
+        match = pattern.search(value)
+        if match:
+            value = match.group("name").strip(" -|:\n\t")
+            break
     if not value or len(value) > 80:
         return None
     lowered = value.lower()
@@ -173,9 +197,24 @@ def normalize_workspace_name(raw_value: str | None) -> str | None:
         return None
     if "@" in value:
         return None
-    if any(token in lowered for token in ("invite member", "pending invites", "workspace settings")):
+    if any(token in lowered for token in GENERIC_WORKSPACE_TEXT_TOKENS):
+        return None
+    if any(token in lowered for token in ("invite member", "pending invites")):
         return None
     return value
+
+
+def extract_workspace_name_from_html(html_content: str | None) -> str | None:
+    if not html_content:
+        return None
+    for pattern in WORKSPACE_NAME_HTML_PATTERNS:
+        match = pattern.search(html_content)
+        if not match:
+            continue
+        candidate = normalize_workspace_name(html.unescape(match.group("name")))
+        if candidate:
+            return candidate
+    return None
 
 
 def extract_workspace_name(page) -> str | None:
@@ -210,7 +249,45 @@ def extract_workspace_name(page) -> str | None:
                 return candidate
     except Exception:
         pass
+    try:
+        candidate = extract_workspace_name_from_html(page.content())
+        if candidate:
+            return candidate
+    except Exception:
+        pass
     return None
+
+
+def page_contains_workspace_payload(page) -> bool:
+    try:
+        return extract_workspace_name_from_html(page.content()) is not None
+    except Exception:
+        return False
+
+
+def stabilize_challenge_state(page, members_url: str) -> str:
+    state = detect_auth_state(page)
+    if state != "captcha_required":
+        return state
+
+    revisited_admin = False
+    for _ in range(CHALLENGE_STABILIZATION_ATTEMPTS):
+        try:
+            page.wait_for_timeout(CHALLENGE_STABILIZATION_WAIT_MS)
+            page.wait_for_load_state("domcontentloaded", timeout=3000)
+        except Exception:
+            pass
+        wait_for_spinner_to_settle(page, timeout_ms=3000)
+        state = detect_auth_state(page)
+        if state != "captcha_required":
+            return state
+        if not revisited_admin and page_contains_workspace_payload(page):
+            try:
+                goto_openai_members(page, members_url)
+                revisited_admin = True
+            except Exception:
+                pass
+    return detect_auth_state(page)
 
 
 def wait_for_spinner_to_settle(page, timeout_ms: int = 10000) -> None:
@@ -431,6 +508,8 @@ def ensure_logged_in(page, request: dict, evidence_dir: Path) -> str:
 
     for _ in range(10):
         state = detect_auth_state(page)
+        if state == "captcha_required":
+            state = stabilize_challenge_state(page, request["members_url"])
         if state == "logged_in":
             return "session_reused" if not auth_path else "_then_".join(auth_path)
         if state == "captcha_required":
@@ -674,6 +753,8 @@ def run_session_test(request: dict) -> dict:
                 goto_openai_members(page, request["members_url"])
                 current_url = page.url
                 state = detect_auth_state(page)
+                if state == "captcha_required":
+                    state = stabilize_challenge_state(page, request["members_url"])
 
                 if state == "captcha_required":
                     capture(page, evidence_dir, "session_test_challenge")

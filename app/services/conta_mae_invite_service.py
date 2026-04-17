@@ -107,6 +107,8 @@ CHALLENGE_TEXT_HINTS = (
     "cf-turnstile",
     "challenge-platform",
 )
+CHALLENGE_STABILIZATION_ATTEMPTS = 4
+CHALLENGE_STABILIZATION_WAIT_MS = 3000
 GENERIC_WORKSPACE_TEXTS = {
     "chatgpt",
     "admin",
@@ -132,7 +134,9 @@ WORKSPACE_NAME_PATTERNS = (
 )
 WORKSPACE_NAME_HTML_PATTERNS = (
     re.compile(r'"workspaceName","(?P<name>[^"]+)"', re.IGNORECASE),
+    re.compile(r'\\"workspaceName\\",\\"(?P<name>[^\\"]+)\\"', re.IGNORECASE),
     re.compile(r'"workspaceName"\s*:\s*"(?P<name>[^"]+)"', re.IGNORECASE),
+    re.compile(r'\\"workspaceName\\"\s*:\s*\\"(?P<name>[^\\"]+)\\"', re.IGNORECASE),
 )
 
 
@@ -725,6 +729,38 @@ def extract_workspace_name(page) -> str | None:
     return None
 
 
+def page_contains_workspace_payload(page) -> bool:
+    try:
+        return extract_workspace_name_from_html(page.content()) is not None
+    except Exception:
+        return False
+
+
+def stabilize_challenge_state(page) -> str:
+    state = detect_auth_state(page)
+    if state != "captcha_required":
+        return state
+
+    revisited_admin = False
+    for _ in range(CHALLENGE_STABILIZATION_ATTEMPTS):
+        try:
+            page.wait_for_timeout(CHALLENGE_STABILIZATION_WAIT_MS)
+            page.wait_for_load_state("domcontentloaded", timeout=3000)
+        except Exception:
+            pass
+        wait_for_spinner_to_settle(page, timeout_ms=3000)
+        state = detect_auth_state(page)
+        if state != "captcha_required":
+            return state
+        if not revisited_admin and page_contains_workspace_payload(page):
+            try:
+                goto_openai_members(page)
+                revisited_admin = True
+            except Exception:
+                pass
+    return detect_auth_state(page)
+
+
 def wait_for_spinner_to_settle(page, timeout_ms: int = 10000) -> None:
     spinner = page.locator('[class*="animate-spin"]').first
     deadline = time.time() + (timeout_ms / 1000)
@@ -1055,6 +1091,8 @@ def test_conta_mae_session(conta_mae: ContaMae) -> dict:
                 goto_openai_members(page)
                 current_url = page.url
                 state = detect_auth_state(page)
+                if state == "captcha_required":
+                    state = stabilize_challenge_state(page)
 
                 if state == "captcha_required":
                     capture(page, evidence_dir, "session_test_challenge")
@@ -1137,6 +1175,8 @@ def ensure_logged_in(page, conta_mae: ContaMae, session: Session, evidence_dir: 
 
     for _ in range(10):
         state = detect_auth_state(page)
+        if state == "captcha_required":
+            state = stabilize_challenge_state(page)
         if state == "logged_in":
             return "session_reused" if not auth_path else "_then_".join(auth_path)
         if state == "captcha_required":
