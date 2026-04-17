@@ -70,6 +70,12 @@ class OpenAIInviteHostRunnerExtractionTestCase(unittest.TestCase):
 
         self.assertEqual(self.runner.extract_workspace_name_from_html(html_content), "Netcourrier")
 
+    def test_runner_builds_home_url_from_members_url(self):
+        self.assertEqual(
+            self.runner.build_openai_home_url("https://chatgpt.com/admin?locale=pt-BR"),
+            "https://chatgpt.com/?locale=pt-BR",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

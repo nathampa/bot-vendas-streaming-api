@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from contextlib import contextmanager
@@ -351,10 +352,36 @@ def detect_auth_state(page) -> str:
     return "logged_in"
 
 
+def build_openai_home_url(members_url: str) -> str:
+    parsed = urllib.parse.urlsplit(members_url)
+    query_pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    locale_query = urllib.parse.urlencode(
+        [(key, value) for key, value in query_pairs if key.lower() == "locale"],
+        doseq=True,
+    )
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "/", locale_query, ""))
+
+
+def goto_openai_home(page, members_url: str) -> None:
+    page.goto(build_openai_home_url(members_url), wait_until="domcontentloaded")
+    page.wait_for_load_state("domcontentloaded")
+    page.wait_for_timeout(1500)
+
+
 def goto_openai_members(page, members_url: str) -> None:
     page.goto(members_url, wait_until="domcontentloaded")
     page.wait_for_load_state("domcontentloaded")
     page.wait_for_timeout(1500)
+
+
+def prewarm_openai_session(page, members_url: str) -> None:
+    goto_openai_home(page, members_url)
+    wait_for_spinner_to_settle(page, timeout_ms=3000)
+    state = detect_auth_state(page)
+    if state == "captcha_required":
+        stabilize_challenge_state(page, members_url)
+    wait_for_spinner_to_settle(page, timeout_ms=3000)
+    goto_openai_members(page, members_url)
 
 
 def navigate_to_invite_surface(page, members_url: str) -> None:
@@ -504,7 +531,7 @@ def fetch_openai_otp(imap_config: dict | None) -> str:
 
 def ensure_logged_in(page, request: dict, evidence_dir: Path) -> str:
     auth_path: list[str] = []
-    goto_openai_members(page, request["members_url"])
+    prewarm_openai_session(page, request["members_url"])
 
     for _ in range(10):
         state = detect_auth_state(page)
@@ -750,7 +777,7 @@ def run_session_test(request: dict) -> dict:
             try:
                 context = browser.contexts[0]
                 page = context.pages[0] if context.pages else context.new_page()
-                goto_openai_members(page, request["members_url"])
+                prewarm_openai_session(page, request["members_url"])
                 current_url = page.url
                 state = detect_auth_state(page)
                 if state == "captcha_required":
