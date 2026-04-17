@@ -178,6 +178,11 @@ def enqueue_invite_job(
 ) -> None:
     if not settings.OPENAI_INVITE_AUTOMATION_ENABLED:
         return
+    if settings.CELERY_BROKER_URL:
+        from app.worker.celery_app import celery_app
+
+        celery_app.send_task("process_conta_mae_invite_job", args=[str(job_id)])
+        return
     if background_tasks is not None:
         background_tasks.add_task(process_invite_job_task, str(job_id))
         return

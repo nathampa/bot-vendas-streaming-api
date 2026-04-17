@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends locales && rm -
     data=codecs.open('requirements.txt','r','utf-16').read(); \
     codecs.open('requirements-utf8.txt','w','utf-8').write(data)" \
  && pip install --no-cache-dir -r requirements-utf8.txt \
+ && pip install --no-cache-dir "celery[redis]==5.5.3" \
  && python -m playwright install --with-deps chromium
 
 COPY . .
