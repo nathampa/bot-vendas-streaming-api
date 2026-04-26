@@ -4,7 +4,7 @@ import uuid
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import desc, func
 from sqlmodel import Session, select
 
@@ -38,6 +38,12 @@ from app.schemas.usuario_schemas import (
     UsuarioSaldoAjusteRequest,
     UsuarioSaldoAjusteResponse,
     UsuarioSaldoHistoricoRead,
+)
+from app.schemas.conta_mae_schemas import ContaMaeInviteJobRead
+from app.services.conta_mae_invite_service import (
+    enqueue_invite_job,
+    job_to_schema_payload,
+    retry_invite_job,
 )
 from app.services.pedido_expiracao_service import resolver_data_expiracao_pedido
 from app.services.conta_mae_member_removal_service import (
@@ -601,6 +607,31 @@ def process_openai_workspace_due_removals(
         enqueued_count=len(job_ids),
         job_ids=job_ids,
     )
+
+
+@router.post("/openai-invite-jobs/{job_id}/retry-now", response_model=ContaMaeInviteJobRead)
+def retry_openai_invite_job_now(
+    *,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+    job_id: uuid.UUID,
+):
+    job = session.get(ContaMaeInviteJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job de convite não encontrado")
+
+    try:
+        retry_invite_job(session, job)
+        session.commit()
+        session.refresh(job)
+        try:
+            enqueue_invite_job(job.id, background_tasks=background_tasks)
+        except Exception as exc:
+            print(f"AVISO: falha ao reenfileirar job de convite {job.id}: {exc}")
+        return ContaMaeInviteJobRead(**job_to_schema_payload(job))
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/ids")

@@ -15,7 +15,12 @@ def escape_markdown_v2(text: str) -> str:
     # Adiciona uma barra invertida antes de cada caractere especial
     return "".join(f"\\{char}" if char in escape_chars else char for char in text)
 
-def send_telegram_message(telegram_id: int, message_text: str, parse_mode: str = "MarkdownV2"):
+def send_telegram_message(
+    telegram_id: int,
+    message_text: str,
+    parse_mode: str = "MarkdownV2",
+    reply_markup: dict | None = None,
+):
     """
     Envia uma mensagem direta para um usuário do Telegram via HTTP.
     
@@ -26,6 +31,8 @@ def send_telegram_message(telegram_id: int, message_text: str, parse_mode: str =
         "text": message_text,
         "parse_mode": parse_mode
     }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     
     # Usamos 'requests' que já está nas dependências da API
     try:
@@ -103,6 +110,20 @@ def send_openai_invite_failure_admin_alert(
     if next_retry_at:
         retry_f = escape_markdown_v2(next_retry_at)
         tentativa_block += f"\nProxima tentativa: `{retry_f}`"
+        retry_context = "\n\nDeseja tentar novamente agora? Se nao responder, o sistema tentara automaticamente no horario acima\\."
+    else:
+        retry_context = "\n\nDeseja tentar novamente agora?"
+
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {
+                    "text": "🔄 Tentar novamente agora",
+                    "callback_data": f"invite_retry:{job_id}",
+                }
+            ]
+        ]
+    }
 
     message = (
         "🚨 *Falha no envio automatico de convite*"
@@ -114,8 +135,9 @@ def send_openai_invite_failure_admin_alert(
         f"\nJob: `{job_id_f}`"
         f"{tentativa_block}"
         f"\n\nMotivo:\n{motivo_f}"
+        f"{retry_context}"
     )
-    send_telegram_message(telegram_id=admin_id, message_text=message)
+    send_telegram_message(telegram_id=admin_id, message_text=message, reply_markup=reply_markup)
 
 
 def send_openai_member_removal_failure_admin_alert(
