@@ -4,6 +4,7 @@ from pathlib import Path
 
 from app.services.conta_mae_invite_service import (
     extract_workspace_name_from_html,
+    generate_fstr_workspace_name,
     normalize_workspace_name,
 )
 
@@ -33,6 +34,9 @@ class ContaMaeInviteServiceTestCase(unittest.TestCase):
         html_content = '\\"workspaceName\\",\\"Netcourrier\\"'
 
         self.assertEqual(extract_workspace_name_from_html(html_content), "Netcourrier")
+
+    def test_generate_fstr_workspace_name_uses_expected_prefix_and_suffix(self):
+        self.assertRegex(generate_fstr_workspace_name(), r"^FStr[#_-]\d{4,6}$")
 
 
 class OpenAIInviteHostRunnerExtractionTestCase(unittest.TestCase):
@@ -69,6 +73,9 @@ class OpenAIInviteHostRunnerExtractionTestCase(unittest.TestCase):
         html_content = '\\"workspaceName\\",\\"Netcourrier\\"'
 
         self.assertEqual(self.runner.extract_workspace_name_from_html(html_content), "Netcourrier")
+
+    def test_runner_generate_fstr_workspace_name_uses_expected_prefix_and_suffix(self):
+        self.assertRegex(self.runner.generate_fstr_workspace_name(), r"^FStr[#_-]\d{4,6}$")
 
     def test_runner_builds_home_url_from_members_url(self):
         self.assertEqual(

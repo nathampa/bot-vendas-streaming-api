@@ -4,11 +4,13 @@ import html
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import subprocess
 import threading
 import time
+import urllib.parse
 import uuid
 from contextlib import contextmanager
 from email import policy
@@ -138,6 +140,48 @@ WORKSPACE_NAME_HTML_PATTERNS = (
     re.compile(r'"workspaceName"\s*:\s*"(?P<name>[^"]+)"', re.IGNORECASE),
     re.compile(r'\\"workspaceName\\"\s*:\s*\\"(?P<name>[^\\"]+)\\"', re.IGNORECASE),
 )
+WORKSPACE_RENAME_MARKER_FILENAME = ".fstr_workspace_renamed.json"
+WORKSPACE_RENAME_PREFIX = "FStr"
+WORKSPACE_RENAME_SYMBOLS = "#_-"
+WORKSPACE_NAME_INPUT_SELECTORS = [
+    'input[name*="workspace" i]',
+    'input[id*="workspace" i]',
+    'input[placeholder*="workspace" i]',
+    'input[name*="organization" i]',
+    'input[id*="organization" i]',
+    'input[name*="name" i]',
+    'input[id*="name" i]',
+    'input[placeholder*="name" i]',
+]
+WORKSPACE_SETTINGS_BUTTON_LABELS = [
+    "workspace settings",
+    "settings",
+    "general",
+    "workspace",
+    "configuracoes",
+    "configurações",
+    "geral",
+]
+WORKSPACE_EDIT_BUTTON_LABELS = [
+    "edit",
+    "rename",
+    "change name",
+    "editar",
+    "renomear",
+    "alterar nome",
+]
+WORKSPACE_SAVE_BUTTON_LABELS = [
+    "save",
+    "update",
+    "confirm",
+    "done",
+    "salvar",
+    "atualizar",
+    "confirmar",
+    "concluir",
+    "concluido",
+    "concluído",
+]
 
 
 def utcnow() -> datetime.datetime:
@@ -733,6 +777,174 @@ def extract_workspace_name(page) -> str | None:
     return None
 
 
+def generate_fstr_workspace_name() -> str:
+    digits_count = secrets.randbelow(3) + 4
+    digits = "".join(secrets.choice("0123456789") for _ in range(digits_count))
+    return f"{WORKSPACE_RENAME_PREFIX}{secrets.choice(WORKSPACE_RENAME_SYMBOLS)}{digits}"
+
+
+def workspace_rename_marker_path(session_path: Path) -> Path:
+    return session_path / WORKSPACE_RENAME_MARKER_FILENAME
+
+
+def workspace_rename_already_done(session_path: Path) -> bool:
+    return workspace_rename_marker_path(session_path).exists()
+
+
+def write_workspace_rename_marker(session_path: Path, workspace_name: str) -> None:
+    marker = workspace_rename_marker_path(session_path)
+    marker.write_text(
+        json.dumps(
+            {
+                "workspace_name": workspace_name,
+                "renamed_at": utcnow().isoformat(),
+            },
+            ensure_ascii=True,
+        ),
+        encoding="utf-8",
+    )
+    marker.chmod(0o600)
+
+
+def build_openai_admin_settings_urls(members_url: str) -> list[str]:
+    parsed = urllib.parse.urlsplit(members_url)
+    query_pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    locale_query = urllib.parse.urlencode(
+        [(key, value) for key, value in query_pairs if key.lower() == "locale"],
+        doseq=True,
+    )
+    paths = ["/admin/settings", "/admin/settings/general", "/admin/settings/workspace"]
+    return [
+        urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, locale_query, ""))
+        for path in paths
+    ]
+
+
+def workspace_name_input_locator(page):
+    label_patterns = [
+        "workspace name",
+        "organization name",
+        "name",
+        "nome do workspace",
+        "nome do espaco de trabalho",
+        "nome do espaço de trabalho",
+        "nome",
+    ]
+    for label in label_patterns:
+        try:
+            locator = page.get_by_label(re.compile(label, re.IGNORECASE)).first
+            if locator.count() > 0 and locator.is_visible():
+                return locator
+        except Exception:
+            continue
+    return first_visible_locator(page, WORKSPACE_NAME_INPUT_SELECTORS)
+
+
+def has_workspace_name_input(page) -> bool:
+    return workspace_name_input_locator(page) is not None
+
+
+def open_workspace_settings(page) -> bool:
+    for url in build_openai_admin_settings_urls(settings.OPENAI_INVITE_MEMBERS_URL):
+        try:
+            page.goto(url, wait_until="domcontentloaded")
+            page.wait_for_load_state("domcontentloaded")
+            page.wait_for_timeout(1500)
+            wait_for_spinner_to_settle(page, timeout_ms=5000)
+            if has_workspace_name_input(page):
+                return True
+            if click_first_button(page, WORKSPACE_EDIT_BUTTON_LABELS):
+                page.wait_for_timeout(800)
+                if has_workspace_name_input(page):
+                    return True
+        except Exception:
+            continue
+
+    goto_openai_members(page)
+    wait_for_spinner_to_settle(page)
+    for label in WORKSPACE_SETTINGS_BUTTON_LABELS:
+        if click_first_button(page, [label]):
+            page.wait_for_timeout(1000)
+            wait_for_spinner_to_settle(page, timeout_ms=5000)
+            if has_workspace_name_input(page):
+                return True
+    if click_first_button(page, WORKSPACE_EDIT_BUTTON_LABELS):
+        page.wait_for_timeout(800)
+        return has_workspace_name_input(page)
+    return has_workspace_name_input(page)
+
+
+def confirm_workspace_rename(page, new_workspace_name: str) -> bool:
+    try:
+        body_text = page.locator("body").inner_text(timeout=1500)
+        if new_workspace_name.lower() in body_text.lower():
+            return True
+    except Exception:
+        pass
+    try:
+        if new_workspace_name.lower() in page.content().lower():
+            return True
+    except Exception:
+        pass
+    try:
+        navigate_to_invite_surface(page)
+        extracted = extract_workspace_name(page)
+        return bool(extracted and extracted.startswith(WORKSPACE_RENAME_PREFIX))
+    except Exception:
+        return False
+
+
+def rename_workspace_once(page, session_path: Path, evidence_dir: Path) -> str | None:
+    session_path.mkdir(parents=True, exist_ok=True)
+    if workspace_rename_already_done(session_path):
+        return None
+
+    current_name = extract_workspace_name(page)
+    if current_name and current_name.startswith(WORKSPACE_RENAME_PREFIX):
+        write_workspace_rename_marker(session_path, current_name)
+        return current_name
+
+    new_workspace_name = generate_fstr_workspace_name()
+    if not open_workspace_settings(page):
+        capture(page, evidence_dir, "workspace_rename_settings_not_found")
+        write_html_snapshot(page, evidence_dir, "workspace_rename_settings_not_found")
+        raise ManualReviewRequired("Sessao autenticada, mas a tela de configuracoes do workspace nao foi localizada.")
+
+    if not click_first_button(page, WORKSPACE_EDIT_BUTTON_LABELS):
+        page.wait_for_timeout(300)
+    input_locator = workspace_name_input_locator(page)
+    if not input_locator:
+        capture(page, evidence_dir, "workspace_rename_input_not_found")
+        write_html_snapshot(page, evidence_dir, "workspace_rename_input_not_found")
+        raise ManualReviewRequired("Sessao autenticada, mas o campo de nome do workspace nao foi localizado.")
+
+    input_locator.fill(new_workspace_name)
+    page.wait_for_timeout(500)
+    if not click_first_button(page, WORKSPACE_SAVE_BUTTON_LABELS):
+        input_locator.press("Enter")
+    page.wait_for_timeout(1800)
+    wait_for_spinner_to_settle(page, timeout_ms=5000)
+
+    body_text = ""
+    try:
+        body_text = page.locator("body").inner_text(timeout=1500).lower()
+    except Exception:
+        body_text = ""
+    if any(token in body_text for token in ("error", "failed", "invalid", "erro", "falha", "invalido", "inválido")):
+        capture(page, evidence_dir, "workspace_rename_error")
+        write_html_snapshot(page, evidence_dir, "workspace_rename_error")
+        raise ManualReviewRequired("A OpenAI retornou erro ao renomear o workspace.")
+
+    if not confirm_workspace_rename(page, new_workspace_name):
+        capture(page, evidence_dir, "workspace_rename_not_confirmed")
+        write_html_snapshot(page, evidence_dir, "workspace_rename_not_confirmed")
+        raise ManualReviewRequired("Renomeacao do workspace enviada, mas nao foi possivel confirmar o novo nome.")
+
+    capture(page, evidence_dir, "workspace_renamed")
+    write_workspace_rename_marker(session_path, new_workspace_name)
+    return new_workspace_name
+
+
 def page_contains_workspace_payload(page) -> bool:
     try:
         return extract_workspace_name_from_html(page.content()) is not None
@@ -1094,6 +1306,7 @@ def test_conta_mae_session(conta_mae: ContaMae) -> dict:
                 page = context.pages[0] if context.pages else context.new_page()
                 goto_openai_members(page)
                 current_url = page.url
+                workspace_renamed = None
                 state = detect_auth_state(page)
                 if state == "captcha_required":
                     state = stabilize_challenge_state(page)
@@ -1124,15 +1337,19 @@ def test_conta_mae_session(conta_mae: ContaMae) -> dict:
                         "evidence_path": html_path,
                     }
 
+                workspace_renamed = rename_workspace_once(page, session_path, evidence_dir)
                 navigate_to_invite_surface(page)
                 current_url = page.url
                 if first_visible_locator(page, INVITE_INPUT_SELECTORS):
                     capture(page, evidence_dir, "session_test_valid")
+                    message = "Sessão válida e pronta para automação de convites."
+                    if workspace_renamed:
+                        message = f"{message} Workspace renomeado para {workspace_renamed}."
                     return {
                         "conta_mae_id": conta_mae.id,
                         "session_storage_path": str(session_path),
                         "status": "VALID",
-                        "message": "Sessão válida e pronta para automação de convites.",
+                        "message": message,
                         "tested_at": tested_at,
                         "current_url": current_url,
                         "evidence_path": None,
@@ -1300,6 +1517,7 @@ def run_invite_automation(session: Session, job: ContaMaeInviteJob, conta_mae: C
             context.set_default_timeout(settings.OPENAI_INVITE_PAGE_TIMEOUT_MS)
             page = context.pages[0] if context.pages else context.new_page()
             auth_path = ensure_logged_in(page, conta_mae, session, evidence_dir)
+            rename_workspace_once(page, session_path, evidence_dir)
             workspace_name = send_invite(page, job, evidence_dir)
             return {
                 "auth_path_used": auth_path,
