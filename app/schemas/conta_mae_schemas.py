@@ -120,6 +120,7 @@ class ContaMaeAdminRead(SQLModel):
     emails_vinculados: List[str] = Field(default_factory=list)
     email_monitor_account_id: Optional[uuid.UUID] = None
     session_storage_path: Optional[str] = None
+    workspace_name: Optional[str] = None
     ultimo_login_automatizado_em: Optional[datetime.datetime] = None
     ultimo_convite_sucesso_em: Optional[datetime.datetime] = None
     ultimo_erro_automacao: Optional[str] = None

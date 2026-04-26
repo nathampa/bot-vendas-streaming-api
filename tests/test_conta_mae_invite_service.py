@@ -1,11 +1,15 @@
 import unittest
 import importlib.util
+import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.services.conta_mae_invite_service import (
     extract_workspace_name_from_html,
     generate_fstr_workspace_name,
+    get_conta_mae_workspace_name,
     normalize_workspace_name,
+    write_workspace_rename_marker,
 )
 
 
@@ -37,6 +41,13 @@ class ContaMaeInviteServiceTestCase(unittest.TestCase):
 
     def test_generate_fstr_workspace_name_uses_expected_prefix_and_suffix(self):
         self.assertRegex(generate_fstr_workspace_name(), r"^FStr[#_-]\d{4,6}$")
+
+    def test_get_conta_mae_workspace_name_reads_session_marker(self):
+        with tempfile.TemporaryDirectory() as session_path:
+            write_workspace_rename_marker(Path(session_path), "FStr#1234")
+            conta = SimpleNamespace(session_storage_path=session_path)
+
+            self.assertEqual(get_conta_mae_workspace_name(conta), "FStr#1234")
 
 
 class OpenAIInviteHostRunnerExtractionTestCase(unittest.TestCase):

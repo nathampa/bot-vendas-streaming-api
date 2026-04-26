@@ -806,6 +806,23 @@ def write_workspace_rename_marker(session_path: Path, workspace_name: str) -> No
     marker.chmod(0o600)
 
 
+def read_workspace_rename_marker(session_path: Path) -> dict | None:
+    marker = workspace_rename_marker_path(session_path)
+    if not marker.exists():
+        return None
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def get_conta_mae_workspace_name(conta_mae: ContaMae) -> str | None:
+    payload = read_workspace_rename_marker(Path(build_session_path(conta_mae)))
+    workspace_name = payload.get("workspace_name") if payload else None
+    return workspace_name if isinstance(workspace_name, str) and workspace_name.strip() else None
+
+
 def build_openai_admin_settings_urls(members_url: str) -> list[str]:
     parsed = urllib.parse.urlsplit(members_url)
     query_pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
