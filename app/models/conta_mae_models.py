@@ -22,6 +22,17 @@ class ContaMaeInviteJobStatus(str, enum.Enum):
     CANCELLED = "CANCELLED"
 
 
+class ContaMaeMemberRemovalJobStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    RETRY_WAIT = "RETRY_WAIT"
+    REMOVED = "REMOVED"
+    NOT_FOUND = "NOT_FOUND"
+    FAILED = "FAILED"
+    MANUAL_REVIEW = "MANUAL_REVIEW"
+    CANCELLED = "CANCELLED"
+
+
 class ContaMae(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     login: str = Field(nullable=False, index=True)
@@ -53,12 +64,15 @@ class ContaMae(SQLModel, table=True):
     convites: List["ContaMaeConvite"] = Relationship(back_populates="conta_mae")
     pedidos: List["Pedido"] = Relationship(back_populates="conta_mae")
     invite_jobs: List["ContaMaeInviteJob"] = Relationship(back_populates="conta_mae")
+    member_removal_jobs: List["ContaMaeMemberRemovalJob"] = Relationship(back_populates="conta_mae")
 
 
 class ContaMaeConvite(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     email_cliente: str = Field(nullable=False, index=True)
     criado_em: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)
+    aviso_remocao_workspace_enviado_em: Optional[datetime.datetime] = Field(default=None, nullable=True, index=True)
+    removido_workspace_em: Optional[datetime.datetime] = Field(default=None, nullable=True, index=True)
 
     conta_mae_id: uuid.UUID = Field(foreign_key="contamae.id", nullable=False)
     pedido_id: Optional[uuid.UUID] = Field(default=None, foreign_key="pedido.id", nullable=True)
@@ -66,6 +80,7 @@ class ContaMaeConvite(SQLModel, table=True):
     conta_mae: ContaMae = Relationship(back_populates="convites")
     pedido: Optional["Pedido"] = Relationship(back_populates="conta_mae_convite")
     invite_job: Optional["ContaMaeInviteJob"] = Relationship(back_populates="convite")
+    member_removal_job: Optional["ContaMaeMemberRemovalJob"] = Relationship(back_populates="convite")
 
 
 class ContaMaeInviteJob(SQLModel, table=True):
@@ -104,3 +119,41 @@ class ContaMaeInviteJob(SQLModel, table=True):
 
     conta_mae: ContaMae = Relationship(back_populates="invite_jobs")
     convite: ContaMaeConvite = Relationship(back_populates="invite_job")
+
+
+class ContaMaeMemberRemovalJob(SQLModel, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    convite_id: uuid.UUID = Field(
+        foreign_key="contamaeconvite.id",
+        nullable=False,
+        sa_column_kwargs={"unique": True},
+    )
+    conta_mae_id: uuid.UUID = Field(foreign_key="contamae.id", nullable=False, index=True)
+    pedido_id: Optional[uuid.UUID] = Field(default=None, foreign_key="pedido.id", nullable=True, index=True)
+    email_cliente: str = Field(nullable=False, index=True)
+    status: ContaMaeMemberRemovalJobStatus = Field(
+        default=ContaMaeMemberRemovalJobStatus.PENDING,
+        sa_column=sa.Column(
+            sa.Enum(ContaMaeMemberRemovalJobStatus, name="conta_mae_member_removal_job_status"),
+            nullable=False,
+            index=True,
+        ),
+    )
+    attempt_count: int = Field(default=0, nullable=False)
+    auth_path_used: Optional[str] = Field(default=None, nullable=True, max_length=80)
+    last_error: Optional[str] = Field(default=None, nullable=True, max_length=500)
+    evidence_path: Optional[str] = Field(default=None, nullable=True, max_length=500)
+    locked_at: Optional[datetime.datetime] = Field(default=None, nullable=True, index=True)
+    started_at: Optional[datetime.datetime] = Field(default=None, nullable=True)
+    finished_at: Optional[datetime.datetime] = Field(default=None, nullable=True)
+    next_retry_at: Optional[datetime.datetime] = Field(default=None, nullable=True, index=True)
+    cancelled_at: Optional[datetime.datetime] = Field(default=None, nullable=True)
+    created_at: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False, index=True)
+    updated_at: datetime.datetime = Field(
+        default_factory=datetime.datetime.utcnow,
+        nullable=False,
+        sa_column_kwargs={"onupdate": datetime.datetime.utcnow},
+    )
+
+    conta_mae: ContaMae = Relationship(back_populates="member_removal_jobs")
+    convite: ContaMaeConvite = Relationship(back_populates="member_removal_job")

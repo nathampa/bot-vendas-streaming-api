@@ -67,6 +67,25 @@ class UsuarioExpiracaoMarcarNotificadaRequest(SQLModel):
     pedido_id: uuid.UUID
     data_expiracao: datetime.date
 
+
+class UsuarioOpenAIWorkspaceRemovalWarningRead(SQLModel):
+    convite_id: uuid.UUID
+    pedido_id: uuid.UUID
+    telegram_id: int
+    produto_nome: str
+    email_cliente: str
+    data_aviso: datetime.date
+    data_remocao_prevista: datetime.date
+
+
+class UsuarioOpenAIWorkspaceRemovalWarningMarkRequest(SQLModel):
+    convite_id: uuid.UUID
+
+
+class UsuarioOpenAIWorkspaceRemovalProcessResponse(SQLModel):
+    enqueued_count: int
+    job_ids: list[uuid.UUID] = []
+
 # Schema para a lista de usuários no painel
 class UsuarioAdminRead(SQLModel):
     id: uuid.UUID

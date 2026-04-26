@@ -53,6 +53,50 @@ INVITE_INPUT_SELECTORS = [
     'input[type="email"]',
     "textarea",
 ]
+MEMBER_SEARCH_SELECTORS = [
+    'input[placeholder*="search" i]',
+    'input[aria-label*="search" i]',
+    'input[name*="search" i]',
+    'input[type="search"]',
+]
+REMOVE_MEMBER_LABELS = [
+    "remove member",
+    "remove user",
+    "deactivate member",
+    "deactivate user",
+    "delete member",
+    "cancel invite",
+    "remove",
+    "deactivate",
+    "delete",
+    "remover",
+    "desativar",
+    "excluir",
+    "cancelar convite",
+]
+CONFIRM_REMOVE_LABELS = [
+    "remove",
+    "confirm",
+    "deactivate",
+    "delete",
+    "yes",
+    "remover",
+    "confirmar",
+    "desativar",
+    "excluir",
+    "sim",
+]
+REMOVAL_SUCCESS_HINTS = (
+    "removed",
+    "deactivated",
+    "deleted",
+    "cancelled",
+    "removido",
+    "desativado",
+    "excluido",
+    "excluído",
+    "cancelado",
+)
 SUCCESS_TEXT_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
@@ -605,6 +649,133 @@ def send_invite(page, request: dict, evidence_dir: Path) -> str | None:
     return extract_workspace_name(page)
 
 
+def click_labeled_action(page, labels: list[str]) -> bool:
+    for label in labels:
+        pattern = re.compile(label, re.IGNORECASE)
+        for role in ("menuitem", "button"):
+            try:
+                item = page.get_by_role(role, name=pattern).first
+                if item.count() > 0 and item.is_visible():
+                    item.click()
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def find_member_email_locator(page, email_cliente: str):
+    exact_pattern = re.compile(f"^{re.escape(email_cliente)}$", re.IGNORECASE)
+    loose_pattern = re.compile(re.escape(email_cliente), re.IGNORECASE)
+    for pattern in (exact_pattern, loose_pattern):
+        try:
+            locator = page.get_by_text(pattern).first
+            if locator.count() > 0 and locator.is_visible():
+                return locator
+        except Exception:
+            continue
+    return None
+
+
+def fill_member_search_if_available(page, email_cliente: str) -> None:
+    search = first_visible_locator(page, MEMBER_SEARCH_SELECTORS)
+    if not search:
+        return
+    try:
+        search.fill(email_cliente)
+        page.wait_for_timeout(1000)
+        wait_for_spinner_to_settle(page, timeout_ms=3000)
+    except Exception:
+        return
+
+
+def navigate_to_members_surface(page, members_url: str) -> None:
+    goto_openai_members(page, members_url)
+    wait_for_spinner_to_settle(page)
+    click_first_button(page, ["members", "manage members", "team", "workspace"])
+    page.wait_for_timeout(800)
+    wait_for_spinner_to_settle(page)
+    click_first_button(page, ["users", "members"])
+    page.wait_for_timeout(800)
+    wait_for_spinner_to_settle(page)
+
+
+def open_member_actions_menu(page, email_cliente: str) -> bool:
+    email_locator = find_member_email_locator(page, email_cliente)
+    if not email_locator:
+        return False
+
+    row = email_locator.locator(
+        "xpath=ancestor::*[@role='row' or self::tr or self::li or self::div][1]"
+    )
+    menu_selectors = [
+        'button[aria-haspopup="menu"]',
+        'button[aria-label*="more" i]',
+        'button[aria-label*="options" i]',
+        'button[aria-label*="actions" i]',
+        'button:has-text("...")',
+    ]
+    for selector in menu_selectors:
+        try:
+            button = row.locator(selector).last
+            if button.count() > 0 and button.is_visible():
+                button.click()
+                page.wait_for_timeout(400)
+                return True
+        except Exception:
+            continue
+
+    try:
+        buttons = row.locator("button")
+        count = buttons.count()
+        if count > 0:
+            buttons.nth(count - 1).click()
+            page.wait_for_timeout(400)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def confirm_member_removal(page) -> None:
+    page.wait_for_timeout(500)
+    click_labeled_action(page, CONFIRM_REMOVE_LABELS)
+    page.wait_for_timeout(1500)
+    wait_for_spinner_to_settle(page, timeout_ms=5000)
+
+
+def remove_member(page, request: dict, evidence_dir: Path) -> str:
+    email_cliente = request["member_email"]
+    navigate_to_members_surface(page, request["members_url"])
+    fill_member_search_if_available(page, email_cliente)
+
+    if not find_member_email_locator(page, email_cliente):
+        capture(page, evidence_dir, "member_not_found")
+        return "NOT_FOUND"
+
+    if not open_member_actions_menu(page, email_cliente):
+        capture(page, evidence_dir, "member_actions_not_found")
+        write_html_snapshot(page, evidence_dir, "member_actions_not_found")
+        raise ManualReviewRequired("Membro localizado, mas o menu de acoes nao foi encontrado.")
+    if not click_labeled_action(page, REMOVE_MEMBER_LABELS):
+        capture(page, evidence_dir, "remove_action_not_found")
+        write_html_snapshot(page, evidence_dir, "remove_action_not_found")
+        raise ManualReviewRequired("Menu de membro aberto, mas a acao de remocao nao foi localizada.")
+
+    confirm_member_removal(page)
+    body_text = page.locator("body").inner_text(timeout=1500).lower()
+    fill_member_search_if_available(page, email_cliente)
+    if not find_member_email_locator(page, email_cliente):
+        capture(page, evidence_dir, "member_removed")
+        return "REMOVED"
+    if any(hint in body_text for hint in REMOVAL_SUCCESS_HINTS):
+        capture(page, evidence_dir, "member_removed_success_hint")
+        return "REMOVED"
+
+    capture(page, evidence_dir, "member_removal_uncertain")
+    write_html_snapshot(page, evidence_dir, "member_removal_uncertain")
+    raise ManualReviewRequired("A remocao foi enviada, mas nao foi possivel confirmar que o membro saiu da lista.")
+
+
 def find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -852,12 +1023,36 @@ def run_send_invite(request: dict) -> dict:
                 browser.close()
 
 
+def run_remove_member(request: dict) -> dict:
+    evidence_dir = Path(request["evidence_dir"])
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+
+    with launched_host_chrome(request) as (endpoint, _):
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.connect_over_cdp(endpoint)
+            try:
+                context = browser.contexts[0]
+                page = context.pages[0] if context.pages else context.new_page()
+                auth_path = ensure_logged_in(page, request, evidence_dir)
+                status = remove_member(page, request, evidence_dir)
+                return {
+                    "status": status,
+                    "message": "Membro removido ou ja ausente do workspace.",
+                    "auth_path_used": auth_path,
+                    "evidence_path": str(evidence_dir),
+                }
+            finally:
+                browser.close()
+
+
 def process_request_payload(request: dict) -> dict:
     action = request.get("action")
     if action == "session_test":
         return run_session_test(request)
     if action == "send_invite":
         return run_send_invite(request)
+    if action == "remove_member":
+        return run_remove_member(request)
     raise HostRunnerError(f"Acao desconhecida para o runner host-side: {action}")
 
 

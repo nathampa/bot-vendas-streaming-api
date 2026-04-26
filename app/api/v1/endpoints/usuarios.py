@@ -9,8 +9,16 @@ from sqlalchemy import desc, func
 from sqlmodel import Session, select
 
 from app.api.v1.deps import get_bot_api_key, get_current_admin_user
+from app.core.config import settings
 from app.db.database import get_session
-from app.models.base import StatusEntregaPedido, TipoStatusPagamento
+from app.models.base import InviteProviderProduto, StatusEntregaPedido, TipoStatusPagamento
+from app.models.conta_mae_models import (
+    ContaMae,
+    ContaMaeConvite,
+    ContaMaeInviteJob,
+    ContaMaeInviteJobStatus,
+    ContaMaeMemberRemovalJobStatus,
+)
 from app.models.pedido_models import Pedido
 from app.models.produto_models import Produto
 from app.models.usuario_models import AjusteSaldoUsuario, RecargaSaldo, Usuario
@@ -20,6 +28,9 @@ from app.schemas.usuario_schemas import (
     UsuarioDocumentoUpdateRequest,
     UsuarioExpiracaoMarcarNotificadaRequest,
     UsuarioExpiracaoPendenteRead,
+    UsuarioOpenAIWorkspaceRemovalProcessResponse,
+    UsuarioOpenAIWorkspaceRemovalWarningMarkRequest,
+    UsuarioOpenAIWorkspaceRemovalWarningRead,
     UsuarioPedidoRead,
     UsuarioPerfilRead,
     UsuarioRead,
@@ -29,6 +40,10 @@ from app.schemas.usuario_schemas import (
     UsuarioSaldoHistoricoRead,
 )
 from app.services.pedido_expiracao_service import resolver_data_expiracao_pedido
+from app.services.conta_mae_member_removal_service import (
+    create_member_removal_job_for_convite,
+    enqueue_member_removal_job,
+)
 
 router = APIRouter(dependencies=[Depends(get_bot_api_key)])
 admin_router = APIRouter(dependencies=[Depends(get_current_admin_user)])
@@ -449,6 +464,143 @@ def marcar_expiracao_notificada(
     session.add(pedido)
     session.commit()
     return None
+
+
+def _openai_workspace_lifecycle_dates(criado_em: datetime.datetime) -> tuple[datetime.date, datetime.date]:
+    aviso = (criado_em + datetime.timedelta(days=settings.OPENAI_WORKSPACE_MEMBER_WARNING_DAYS)).date()
+    remocao = (
+        criado_em
+        + datetime.timedelta(
+            days=settings.OPENAI_WORKSPACE_MEMBER_WARNING_DAYS + settings.OPENAI_WORKSPACE_MEMBER_GRACE_DAYS
+        )
+    ).date()
+    return aviso, remocao
+
+
+@router.get(
+    "/openai-workspace-remocoes/avisos-pendentes",
+    response_model=list[UsuarioOpenAIWorkspaceRemovalWarningRead],
+)
+def get_openai_workspace_removal_warning_pending(*, session: Session = Depends(get_session), limite: int = 200):
+    if limite < 1:
+        raise HTTPException(status_code=400, detail="O limite precisa ser maior ou igual a 1.")
+    if limite > 500:
+        raise HTTPException(status_code=400, detail="O limite máximo permitido é 500.")
+
+    now = datetime.datetime.utcnow()
+    warning_cutoff = now - datetime.timedelta(days=settings.OPENAI_WORKSPACE_MEMBER_WARNING_DAYS)
+    stmt = (
+        select(
+            ContaMaeConvite.id,
+            ContaMaeConvite.pedido_id,
+            ContaMaeConvite.email_cliente,
+            ContaMaeConvite.criado_em,
+            Usuario.telegram_id,
+            Produto.nome,
+        )
+        .join(Pedido, Pedido.id == ContaMaeConvite.pedido_id)
+        .join(Usuario, Usuario.id == Pedido.usuario_id)
+        .join(Produto, Produto.id == Pedido.produto_id)
+        .join(ContaMae, ContaMae.id == ContaMaeConvite.conta_mae_id)
+        .join(ContaMaeInviteJob, ContaMaeInviteJob.convite_id == ContaMaeConvite.id)
+        .where(Pedido.status_entrega == StatusEntregaPedido.ENTREGUE)
+        .where(Produto.invite_provider == InviteProviderProduto.OPENAI)
+        .where(ContaMaeInviteJob.status == ContaMaeInviteJobStatus.SENT)
+        .where(ContaMaeConvite.aviso_remocao_workspace_enviado_em == None)
+        .where(ContaMaeConvite.removido_workspace_em == None)
+        .where(ContaMaeConvite.criado_em <= warning_cutoff)
+        .order_by(ContaMaeConvite.criado_em.asc())
+        .limit(limite)
+    )
+
+    pendentes: list[UsuarioOpenAIWorkspaceRemovalWarningRead] = []
+    for convite_id, pedido_id, email_cliente, criado_em, telegram_id, produto_nome in session.exec(stmt).all():
+        if not pedido_id:
+            continue
+        data_aviso, data_remocao_prevista = _openai_workspace_lifecycle_dates(criado_em)
+        pendentes.append(
+            UsuarioOpenAIWorkspaceRemovalWarningRead(
+                convite_id=convite_id,
+                pedido_id=pedido_id,
+                telegram_id=telegram_id,
+                produto_nome=produto_nome,
+                email_cliente=email_cliente,
+                data_aviso=data_aviso,
+                data_remocao_prevista=data_remocao_prevista,
+            )
+        )
+    return pendentes
+
+
+@router.post("/openai-workspace-remocoes/avisos-pendentes/marcar-enviado", status_code=status.HTTP_204_NO_CONTENT)
+def mark_openai_workspace_removal_warning_sent(
+    *,
+    session: Session = Depends(get_session),
+    payload: UsuarioOpenAIWorkspaceRemovalWarningMarkRequest,
+):
+    convite = session.get(ContaMaeConvite, payload.convite_id)
+    if not convite:
+        raise HTTPException(status_code=404, detail="Convite não encontrado.")
+    if convite.aviso_remocao_workspace_enviado_em is None:
+        convite.aviso_remocao_workspace_enviado_em = datetime.datetime.utcnow()
+        session.add(convite)
+        session.commit()
+    return None
+
+
+@router.post(
+    "/openai-workspace-remocoes/processar-vencidas",
+    response_model=UsuarioOpenAIWorkspaceRemovalProcessResponse,
+)
+def process_openai_workspace_due_removals(
+    *,
+    session: Session = Depends(get_session),
+    limite: int = 100,
+):
+    if limite < 1:
+        raise HTTPException(status_code=400, detail="O limite precisa ser maior ou igual a 1.")
+    if limite > 300:
+        raise HTTPException(status_code=400, detail="O limite máximo permitido é 300.")
+
+    now = datetime.datetime.utcnow()
+    removal_cutoff = now - datetime.timedelta(
+        days=settings.OPENAI_WORKSPACE_MEMBER_WARNING_DAYS + settings.OPENAI_WORKSPACE_MEMBER_GRACE_DAYS
+    )
+    warning_grace_cutoff = now - datetime.timedelta(days=settings.OPENAI_WORKSPACE_MEMBER_GRACE_DAYS)
+    stmt = (
+        select(ContaMaeConvite)
+        .join(Pedido, Pedido.id == ContaMaeConvite.pedido_id)
+        .join(Produto, Produto.id == Pedido.produto_id)
+        .join(ContaMaeInviteJob, ContaMaeInviteJob.convite_id == ContaMaeConvite.id)
+        .where(Pedido.status_entrega == StatusEntregaPedido.ENTREGUE)
+        .where(Produto.invite_provider == InviteProviderProduto.OPENAI)
+        .where(ContaMaeInviteJob.status == ContaMaeInviteJobStatus.SENT)
+        .where(ContaMaeConvite.aviso_remocao_workspace_enviado_em != None)
+        .where(ContaMaeConvite.aviso_remocao_workspace_enviado_em <= warning_grace_cutoff)
+        .where(ContaMaeConvite.removido_workspace_em == None)
+        .where(ContaMaeConvite.criado_em <= removal_cutoff)
+        .order_by(ContaMaeConvite.criado_em.asc())
+        .limit(limite)
+    )
+
+    job_ids: list[uuid.UUID] = []
+    for convite in session.exec(stmt).all():
+        job = create_member_removal_job_for_convite(session, convite)
+        if job.status != ContaMaeMemberRemovalJobStatus.PENDING:
+            continue
+        job_ids.append(job.id)
+
+    session.commit()
+    for job_id in job_ids:
+        try:
+            enqueue_member_removal_job(job_id)
+        except Exception as exc:
+            print(f"AVISO: falha ao enfileirar job de remocao {job_id}: {exc}")
+
+    return UsuarioOpenAIWorkspaceRemovalProcessResponse(
+        enqueued_count=len(job_ids),
+        job_ids=job_ids,
+    )
 
 
 @router.get("/ids")
