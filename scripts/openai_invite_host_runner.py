@@ -395,7 +395,7 @@ def workspace_name_input_locator(page):
         "organization name",
         "name",
         "nome do workspace",
-        "nome do espaco de trabalho",
+        "nome do espaço de trabalho",
         "nome do espaço de trabalho",
         "nome",
     ]
@@ -478,7 +478,7 @@ def rename_workspace_once(page, request: dict, evidence_dir: Path) -> str | None
     if not open_workspace_settings(page, request["members_url"]):
         capture(page, evidence_dir, "workspace_rename_settings_not_found")
         write_html_snapshot(page, evidence_dir, "workspace_rename_settings_not_found")
-        raise ManualReviewRequired("Sessao autenticada, mas a tela de configuracoes do workspace nao foi localizada.")
+        raise ManualReviewRequired("Sessão autenticada, mas a tela de configurações do workspace não foi localizada.")
 
     if not click_first_button(page, WORKSPACE_EDIT_BUTTON_LABELS):
         page.wait_for_timeout(300)
@@ -486,7 +486,7 @@ def rename_workspace_once(page, request: dict, evidence_dir: Path) -> str | None
     if not input_locator:
         capture(page, evidence_dir, "workspace_rename_input_not_found")
         write_html_snapshot(page, evidence_dir, "workspace_rename_input_not_found")
-        raise ManualReviewRequired("Sessao autenticada, mas o campo de nome do workspace nao foi localizado.")
+        raise ManualReviewRequired("Sessão autenticada, mas o campo de nome do workspace não foi localizado.")
 
     input_locator.fill(new_workspace_name)
     page.wait_for_timeout(500)
@@ -508,7 +508,7 @@ def rename_workspace_once(page, request: dict, evidence_dir: Path) -> str | None
     if not confirm_workspace_rename(page, request["members_url"], new_workspace_name):
         capture(page, evidence_dir, "workspace_rename_not_confirmed")
         write_html_snapshot(page, evidence_dir, "workspace_rename_not_confirmed")
-        raise ManualReviewRequired("Renomeacao do workspace enviada, mas nao foi possivel confirmar o novo nome.")
+        raise ManualReviewRequired("Renomeação do workspace enviada, mas não foi possível confirmar o novo nome.")
 
     capture(page, evidence_dir, "workspace_renamed")
     write_workspace_rename_marker(session_path, new_workspace_name)
@@ -720,7 +720,7 @@ def extract_otp_from_message(message: email.message.Message) -> str | None:
 
 def fetch_openai_otp(imap_config: dict | None) -> str:
     if not imap_config:
-        raise ManualReviewRequired("Nenhuma configuracao IMAP disponivel para buscar o OTP da OpenAI.")
+        raise ManualReviewRequired("Nenhuma configuração IMAP disponível para buscar o OTP da OpenAI.")
 
     deadline = time.time() + int(imap_config.get("otp_timeout_seconds", 120))
     poll_interval = int(imap_config.get("poll_interval_seconds", 5))
@@ -782,7 +782,7 @@ def fetch_openai_otp(imap_config: dict | None) -> str:
                     pass
         time.sleep(poll_interval)
 
-    raise OTPTimeoutError(last_error or "Codigo OTP da OpenAI nao encontrado a tempo.")
+    raise OTPTimeoutError(last_error or "Código OTP da OpenAI não encontrado a tempo.")
 
 
 def ensure_logged_in(page, request: dict, evidence_dir: Path) -> str:
@@ -819,7 +819,7 @@ def ensure_logged_in(page, request: dict, evidence_dir: Path) -> str:
             auth_path.append("otp")
             otp = fetch_openai_otp(request.get("imap"))
             if not fill_visible(page, OTP_INPUT_SELECTORS, otp):
-                raise ManualReviewRequired("A tela pediu OTP, mas nenhum campo compativel foi encontrado.")
+                raise ManualReviewRequired("A tela pediu OTP, mas nenhum campo compatível foi encontrado.")
             if not click_first_button(page, ["continue", "verify", "confirm", "next"]):
                 page.keyboard.press("Enter")
             page.wait_for_timeout(1500)
@@ -827,11 +827,11 @@ def ensure_logged_in(page, request: dict, evidence_dir: Path) -> str:
 
         capture(page, evidence_dir, "unknown_auth_state")
         write_html_snapshot(page, evidence_dir, "unknown_auth_state")
-        raise ManualReviewRequired(f"Estado de autenticacao nao reconhecido: {state}")
+        raise ManualReviewRequired(f"Estado de autenticação não reconhecido: {state}")
 
     capture(page, evidence_dir, "auth_loop_exhausted")
     write_html_snapshot(page, evidence_dir, "auth_loop_exhausted")
-    raise ManualReviewRequired("Fluxo de autenticacao nao convergiu para uma sessao logada.")
+    raise ManualReviewRequired("Fluxo de autenticação não convergiu para uma sessão logada.")
 
 
 def send_invite(page, request: dict, evidence_dir: Path) -> str | None:
@@ -839,10 +839,10 @@ def send_invite(page, request: dict, evidence_dir: Path) -> str | None:
     if not first_visible_locator(page, INVITE_INPUT_SELECTORS):
         capture(page, evidence_dir, "invite_surface_not_found")
         write_html_snapshot(page, evidence_dir, "invite_surface_not_found")
-        raise ManualReviewRequired("Nao foi possivel localizar a interface de convite da OpenAI.")
+        raise ManualReviewRequired("Não foi possível localizar a interface de convite da OpenAI.")
 
     if not fill_visible(page, INVITE_INPUT_SELECTORS, request["invite_email"]):
-        raise ManualReviewRequired("Campo de email de convite nao encontrado.")
+        raise ManualReviewRequired("Campo de email de convite não encontrado.")
 
     page.wait_for_timeout(500)
     if not click_first_button(page, ["invite", "send invite", "add member", "add members", "send"]):
@@ -967,11 +967,11 @@ def remove_member(page, request: dict, evidence_dir: Path) -> str:
     if not open_member_actions_menu(page, email_cliente):
         capture(page, evidence_dir, "member_actions_not_found")
         write_html_snapshot(page, evidence_dir, "member_actions_not_found")
-        raise ManualReviewRequired("Membro localizado, mas o menu de acoes nao foi encontrado.")
+        raise ManualReviewRequired("Membro localizado, mas o menu de ações não foi encontrado.")
     if not click_labeled_action(page, REMOVE_MEMBER_LABELS):
         capture(page, evidence_dir, "remove_action_not_found")
         write_html_snapshot(page, evidence_dir, "remove_action_not_found")
-        raise ManualReviewRequired("Menu de membro aberto, mas a acao de remocao nao foi localizada.")
+        raise ManualReviewRequired("Menu de membro aberto, mas a ação de remoção não foi localizada.")
 
     confirm_member_removal(page)
     body_text = page.locator("body").inner_text(timeout=1500).lower()
@@ -985,7 +985,7 @@ def remove_member(page, request: dict, evidence_dir: Path) -> str:
 
     capture(page, evidence_dir, "member_removal_uncertain")
     write_html_snapshot(page, evidence_dir, "member_removal_uncertain")
-    raise ManualReviewRequired("A remocao foi enviada, mas nao foi possivel confirmar que o membro saiu da lista.")
+    raise ManualReviewRequired("A remoção foi enviada, mas não foi possível confirmar que o membro saiu da lista.")
 
 
 def find_free_port() -> int:
@@ -1026,7 +1026,7 @@ def clear_stale_profile_locks(session_path: Path) -> None:
 
     if host == current_hostname and pid and process_exists(pid):
         raise HostRunnerError(
-            f"O perfil da OpenAI ainda esta em uso pelo processo {pid}. Feche o Chrome dessa conta na VM e tente novamente."
+            f"O perfil da OpenAI ainda está em uso pelo processo {pid}. Feche o Chrome dessa conta na VM e tente novamente."
         )
 
     for name in ("SingletonCookie", "SingletonLock", "SingletonSocket", "DevToolsActivePort"):
@@ -1057,7 +1057,7 @@ def wait_for_devtools(port: int, process: subprocess.Popen) -> str:
 def virtual_display(width: int = 1440, height: int = 960, depth: int = 24):
     xvfb_binary = shutil.which("Xvfb")
     if not xvfb_binary:
-        raise HostRunnerError("Xvfb nao encontrado no host.")
+        raise HostRunnerError("Xvfb não encontrado no host.")
 
     display_number = 90
     while Path(f"/tmp/.X11-unix/X{display_number}").exists():
@@ -1103,7 +1103,7 @@ def virtual_display(width: int = 1440, height: int = 960, depth: int = 24):
 def launched_host_chrome(request: dict):
     chrome_binary = shutil.which("google-chrome") or shutil.which("google-chrome-stable")
     if not chrome_binary:
-        raise HostRunnerError("Google Chrome nao encontrado no host.")
+        raise HostRunnerError("Google Chrome não encontrado no host.")
 
     session_path = Path(request["session_path"])
     session_path.mkdir(parents=True, exist_ok=True)
@@ -1171,7 +1171,7 @@ def run_session_test(request: dict) -> dict:
                     html_path = write_html_snapshot(page, evidence_dir, "session_test_challenge")
                     return {
                         "status": "CHALLENGE",
-                        "message": "A OpenAI/Cloudflare pediu uma verificacao manual nesta sessao.",
+                        "message": "A OpenAI/Cloudflare pediu uma verificação manual nesta sessão.",
                         "tested_at": tested_at,
                         "current_url": current_url,
                         "evidence_path": html_path,
@@ -1181,7 +1181,7 @@ def run_session_test(request: dict) -> dict:
                     html_path = write_html_snapshot(page, evidence_dir, "session_test_login_required")
                     return {
                         "status": "NEEDS_LOGIN",
-                        "message": "A sessao ainda nao esta autenticada. Faca o login manual na VM e teste novamente.",
+                        "message": "A sessão ainda não está autenticada. Faça o login manual na VM e teste novamente.",
                         "tested_at": tested_at,
                         "current_url": current_url,
                         "evidence_path": html_path,
@@ -1192,7 +1192,7 @@ def run_session_test(request: dict) -> dict:
                 current_url = page.url
                 if first_visible_locator(page, INVITE_INPUT_SELECTORS):
                     capture(page, evidence_dir, "session_test_valid")
-                    message = "Sessao valida e pronta para automacao de convites."
+                    message = "Sessão válida e pronta para automação de convites."
                     if workspace_renamed:
                         message = f"{message} Workspace renomeado para {workspace_renamed}."
                     return {
@@ -1207,7 +1207,7 @@ def run_session_test(request: dict) -> dict:
                 html_path = write_html_snapshot(page, evidence_dir, "session_test_invite_not_found")
                 return {
                     "status": "MANUAL_REVIEW",
-                    "message": "Sessao autenticada, mas a interface de convites nao foi localizada automaticamente.",
+                    "message": "Sessão autenticada, mas a interface de convites não foi localizada automaticamente.",
                     "tested_at": tested_at,
                     "current_url": current_url,
                     "evidence_path": html_path,
@@ -1254,7 +1254,7 @@ def run_remove_member(request: dict) -> dict:
                 status = remove_member(page, request, evidence_dir)
                 return {
                     "status": status,
-                    "message": "Membro removido ou ja ausente do workspace.",
+                    "message": "Membro removido ou já ausente do workspace.",
                     "auth_path_used": auth_path,
                     "evidence_path": str(evidence_dir),
                 }
@@ -1270,7 +1270,7 @@ def process_request_payload(request: dict) -> dict:
         return run_send_invite(request)
     if action == "remove_member":
         return run_remove_member(request)
-    raise HostRunnerError(f"Acao desconhecida para o runner host-side: {action}")
+    raise HostRunnerError(f"Ação desconhecida para o runner host-side: {action}")
 
 
 def normalize_result(request: dict, result: dict) -> dict:

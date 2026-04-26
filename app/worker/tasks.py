@@ -239,7 +239,7 @@ def process_conta_mae_member_removal_job(job_id: str):
     try:
         processed_job = process_member_removal_job(uuid.UUID(job_id))
         print(
-            "CELERY WORKER: Job de remocao de membro concluido. "
+            "CELERY WORKER: Job de remoção de membro concluído. "
             f"status={processed_job['status']} conta_mae_id={processed_job['conta_mae_id']}"
         )
         return {

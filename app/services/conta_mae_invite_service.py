@@ -630,7 +630,7 @@ def wait_for_host_runner_result(result_path: Path) -> dict:
                 result_path.unlink(missing_ok=True)
             return payload
         time.sleep(0.5)
-    raise InviteAutomationError("O runner host-side da OpenAI nao respondeu a tempo.")
+    raise InviteAutomationError("O runner host-side da OpenAI não respondeu a tempo.")
 
 
 def execute_host_runner_request(payload: dict) -> dict:
@@ -656,7 +656,7 @@ def build_host_runner_invite_request(
 ) -> dict:
     password = decrypt_data(conta_mae.senha)
     if not password:
-        raise ManualReviewRequired("Nao foi possivel descriptografar a senha da conta-mae.")
+        raise ManualReviewRequired("Não foi possível descriptografar a senha da conta-mãe.")
 
     return {
         "action": "send_invite",
@@ -843,7 +843,7 @@ def workspace_name_input_locator(page):
         "organization name",
         "name",
         "nome do workspace",
-        "nome do espaco de trabalho",
+        "nome do espaço de trabalho",
         "nome do espaço de trabalho",
         "nome",
     ]
@@ -925,7 +925,7 @@ def rename_workspace_once(page, session_path: Path, evidence_dir: Path) -> str |
     if not open_workspace_settings(page):
         capture(page, evidence_dir, "workspace_rename_settings_not_found")
         write_html_snapshot(page, evidence_dir, "workspace_rename_settings_not_found")
-        raise ManualReviewRequired("Sessao autenticada, mas a tela de configuracoes do workspace nao foi localizada.")
+        raise ManualReviewRequired("Sessão autenticada, mas a tela de configurações do workspace não foi localizada.")
 
     if not click_first_button(page, WORKSPACE_EDIT_BUTTON_LABELS):
         page.wait_for_timeout(300)
@@ -933,7 +933,7 @@ def rename_workspace_once(page, session_path: Path, evidence_dir: Path) -> str |
     if not input_locator:
         capture(page, evidence_dir, "workspace_rename_input_not_found")
         write_html_snapshot(page, evidence_dir, "workspace_rename_input_not_found")
-        raise ManualReviewRequired("Sessao autenticada, mas o campo de nome do workspace nao foi localizado.")
+        raise ManualReviewRequired("Sessão autenticada, mas o campo de nome do workspace não foi localizado.")
 
     input_locator.fill(new_workspace_name)
     page.wait_for_timeout(500)
@@ -955,7 +955,7 @@ def rename_workspace_once(page, session_path: Path, evidence_dir: Path) -> str |
     if not confirm_workspace_rename(page, new_workspace_name):
         capture(page, evidence_dir, "workspace_rename_not_confirmed")
         write_html_snapshot(page, evidence_dir, "workspace_rename_not_confirmed")
-        raise ManualReviewRequired("Renomeacao do workspace enviada, mas nao foi possivel confirmar o novo nome.")
+        raise ManualReviewRequired("Renomeação do workspace enviada, mas não foi possível confirmar o novo nome.")
 
     capture(page, evidence_dir, "workspace_renamed")
     write_workspace_rename_marker(session_path, new_workspace_name)
@@ -1118,7 +1118,7 @@ def next_virtual_display() -> str:
         socket_path = Path(f"/tmp/.X11-unix/X{display_number}")
         if not socket_path.exists():
             return f":{display_number}"
-    raise InviteAutomationError("Nao foi possivel reservar um display virtual livre para a automacao.")
+    raise InviteAutomationError("Não foi possível reservar um display virtual livre para a automação.")
 
 
 def wait_for_virtual_display(display: str, process: subprocess.Popen) -> None:
@@ -1130,7 +1130,7 @@ def wait_for_virtual_display(display: str, process: subprocess.Popen) -> None:
         if socket_path.exists():
             return
         time.sleep(0.1)
-    raise InviteAutomationError("Tempo esgotado ao iniciar o display virtual da automacao.")
+    raise InviteAutomationError("Tempo esgotado ao iniciar o display virtual da automação.")
 
 
 @contextmanager
@@ -1141,7 +1141,7 @@ def maybe_virtual_display():
 
     xvfb_binary = shutil.which("Xvfb")
     if not xvfb_binary:
-        raise InviteAutomationError("Xvfb nao esta disponivel no ambiente da API para automacao headful.")
+        raise InviteAutomationError("Xvfb não está disponível no ambiente da API para automação headful.")
 
     display = next_virtual_display()
     process = subprocess.Popen(
@@ -1271,7 +1271,7 @@ def test_conta_mae_session(conta_mae: ContaMae) -> dict:
                 "conta_mae_id": conta_mae.id,
                 "session_storage_path": str(session_path),
                 "status": result.get("status", "ERROR"),
-                "message": result.get("message", "Runner host-side nao retornou mensagem."),
+                "message": result.get("message", "Runner host-side não retornou mensagem."),
                 "tested_at": result.get("tested_at", tested_at),
                 "current_url": result.get("current_url"),
                 "evidence_path": result.get("evidence_path"),
@@ -1515,9 +1515,9 @@ def run_invite_automation(session: Session, job: ContaMaeInviteJob, conta_mae: C
         if result.get("evidence_path"):
             job.evidence_path = result["evidence_path"]
         if status == "MANUAL_REVIEW":
-            raise ManualReviewRequired(result.get("message") or "Runner host-side exigiu revisao manual.")
+            raise ManualReviewRequired(result.get("message") or "Runner host-side exigiu revisão manual.")
         if result.get("auth_step_failed") == "otp":
-            raise OTPTimeoutError(result.get("message") or "Runner host-side nao conseguiu concluir o OTP.")
+            raise OTPTimeoutError(result.get("message") or "Runner host-side não conseguiu concluir o OTP.")
         raise InviteAutomationError(result.get("message") or "Runner host-side falhou ao enviar o convite.")
 
     if sync_playwright is None:

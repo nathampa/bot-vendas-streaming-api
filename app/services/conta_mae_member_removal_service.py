@@ -136,11 +136,11 @@ def process_member_removal_job_task(job_id: str) -> None:
     try:
         processed_job = process_member_removal_job(uuid.UUID(job_id))
         print(
-            "BACKGROUND TASK: Job de remocao de membro processado. "
+            "BACKGROUND TASK: Job de remoção de membro processado. "
             f"id={processed_job['id']} status={processed_job['status']}"
         )
     except Exception as exc:
-        print(f"ERRO CRITICO na tarefa local de remocao de membro ({job_id}): {exc}")
+        print(f"ERRO CRÍTICO na tarefa local de remoção de membro ({job_id}): {exc}")
 
 
 def enqueue_member_removal_job(
@@ -188,7 +188,7 @@ def build_host_runner_removal_request(
 ) -> dict:
     password = decrypt_data(conta_mae.senha)
     if not password:
-        raise ManualReviewRequired("Nao foi possivel descriptografar a senha da conta-mae.")
+        raise ManualReviewRequired("Não foi possível descriptografar a senha da conta-mãe.")
 
     return {
         "action": "remove_member",
@@ -308,11 +308,11 @@ def remove_member_from_workspace(page, email_cliente: str, evidence_dir: Path) -
     if not open_member_actions_menu(page, email_cliente):
         capture(page, evidence_dir, "member_actions_not_found")
         write_html_snapshot(page, evidence_dir, "member_actions_not_found")
-        raise ManualReviewRequired("Membro localizado, mas o menu de acoes nao foi encontrado.")
+        raise ManualReviewRequired("Membro localizado, mas o menu de ações não foi encontrado.")
     if not click_labeled_action(page, REMOVE_MEMBER_LABELS):
         capture(page, evidence_dir, "remove_action_not_found")
         write_html_snapshot(page, evidence_dir, "remove_action_not_found")
-        raise ManualReviewRequired("Menu de membro aberto, mas a acao de remocao nao foi localizada.")
+        raise ManualReviewRequired("Menu de membro aberto, mas a ação de remoção não foi localizada.")
 
     confirm_member_removal(page)
     body_text = page.locator("body").inner_text(timeout=1500).lower()
@@ -326,7 +326,7 @@ def remove_member_from_workspace(page, email_cliente: str, evidence_dir: Path) -
 
     capture(page, evidence_dir, "member_removal_uncertain")
     write_html_snapshot(page, evidence_dir, "member_removal_uncertain")
-    raise ManualReviewRequired("A remocao foi enviada, mas nao foi possivel confirmar que o membro saiu da lista.")
+    raise ManualReviewRequired("A remoção foi enviada, mas não foi possível confirmar que o membro saiu da lista.")
 
 
 def run_member_removal_automation(
@@ -346,11 +346,11 @@ def run_member_removal_automation(
         if result.get("evidence_path"):
             job.evidence_path = result["evidence_path"]
         if status == "MANUAL_REVIEW":
-            raise ManualReviewRequired(result.get("message") or "Runner host-side exigiu revisao manual.")
+            raise ManualReviewRequired(result.get("message") or "Runner host-side exigiu revisão manual.")
         raise InviteAutomationError(result.get("message") or "Runner host-side falhou ao remover o membro.")
 
     if sync_playwright is None:
-        raise ManualReviewRequired("Playwright nao esta instalado no ambiente da API.")
+        raise ManualReviewRequired("Playwright não está instalado no ambiente da API.")
 
     evidence_dir = build_removal_evidence_dir(job)
     session_path = Path(build_session_path(conta_mae))
@@ -420,7 +420,7 @@ def schedule_retry_or_manual_review(
         try:
             notify_member_removal_admin_failure(session, job, conta_mae)
         except Exception as exc_notify:
-            print(f"AVISO: falha ao alertar admin da remocao {job.id}: {exc_notify}")
+            print(f"AVISO: falha ao alertar admin da remoção {job.id}: {exc_notify}")
         return removal_result_payload(job)
 
     cooldown_seconds = min(compute_retry_cooldown_seconds(job.attempt_count), remaining_seconds)
@@ -439,11 +439,11 @@ def schedule_retry_or_manual_review(
     try:
         notify_member_removal_admin_failure(session, job, conta_mae)
     except Exception as exc_notify:
-        print(f"AVISO: falha ao alertar admin da remocao {job.id}: {exc_notify}")
+        print(f"AVISO: falha ao alertar admin da remoção {job.id}: {exc_notify}")
     try:
         enqueue_member_removal_job(job.id, countdown_seconds=cooldown_seconds)
     except Exception as exc_enqueue:
-        print(f"AVISO: falha ao agendar retry da remocao {job.id}: {exc_enqueue}")
+        print(f"AVISO: falha ao agendar retry da remoção {job.id}: {exc_enqueue}")
     return removal_result_payload(job)
 
 
@@ -481,7 +481,7 @@ def process_member_removal_job(job_id: uuid.UUID) -> dict:
     with Session(engine) as session:
         job = session.get(ContaMaeMemberRemovalJob, job_id)
         if not job:
-            raise InviteAutomationError(f"Job {job_id} nao encontrado.")
+            raise InviteAutomationError(f"Job {job_id} não encontrado.")
         if job.status in (
             ContaMaeMemberRemovalJobStatus.REMOVED,
             ContaMaeMemberRemovalJobStatus.NOT_FOUND,
@@ -499,7 +499,7 @@ def process_member_removal_job(job_id: uuid.UUID) -> dict:
         convite = session.get(ContaMaeConvite, job.convite_id)
         if not conta_mae or not convite:
             job.status = ContaMaeMemberRemovalJobStatus.FAILED
-            job.last_error = "Conta-mae ou convite nao encontrado para o job."
+            job.last_error = "Conta-mãe ou convite não encontrado para o job."
             session.add(job)
             session.commit()
             session.refresh(job)
@@ -508,7 +508,7 @@ def process_member_removal_job(job_id: uuid.UUID) -> dict:
         produto = session.get(Produto, conta_mae.produto_id)
         if not produto_supports_openai_invite_automation(produto):
             job.status = ContaMaeMemberRemovalJobStatus.MANUAL_REVIEW
-            job.last_error = "Automacao OpenAI desabilitada para o produto desta conta-mae."
+            job.last_error = "Automação OpenAI desabilitada para o produto desta conta-mãe."
             job.finished_at = utcnow()
             job.locked_at = None
             job.next_retry_at = None
@@ -540,7 +540,7 @@ def process_member_removal_job(job_id: uuid.UUID) -> dict:
             refreshed_conta = session.get(ContaMae, conta_mae.id)
             refreshed_convite = session.get(ContaMaeConvite, convite.id)
             if not refreshed_job or not refreshed_conta or not refreshed_convite:
-                raise InviteAutomationError("Job, conta-mae ou convite indisponivel apos automacao.")
+                raise InviteAutomationError("Job, conta-mãe ou convite indisponível após automação.")
             status = (
                 ContaMaeMemberRemovalJobStatus.NOT_FOUND
                 if automation_result.get("status") == "NOT_FOUND"
@@ -561,7 +561,7 @@ def process_member_removal_job(job_id: uuid.UUID) -> dict:
             refreshed_job = session.get(ContaMaeMemberRemovalJob, job_id)
             refreshed_conta = session.get(ContaMae, conta_mae.id)
             if not refreshed_job or not refreshed_conta:
-                raise InviteAutomationError("Job ou conta-mae indisponivel ao tratar falha.")
+                raise InviteAutomationError("Job ou conta-mãe indisponível ao tratar falha.")
             if challenge_retryable(str(exc)):
                 return schedule_retry_or_manual_review(
                     session,
@@ -587,7 +587,7 @@ def process_member_removal_job(job_id: uuid.UUID) -> dict:
             try:
                 notify_member_removal_admin_failure(session, refreshed_job, refreshed_conta)
             except Exception as exc_notify:
-                print(f"AVISO: falha ao alertar admin da remocao {refreshed_job.id}: {exc_notify}")
+                print(f"AVISO: falha ao alertar admin da remoção {refreshed_job.id}: {exc_notify}")
             return removal_result_payload(refreshed_job)
 
 

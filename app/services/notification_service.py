@@ -70,12 +70,12 @@ def send_openai_invite_sent_message(
         f"\n\nO convite do seu acesso para *{produto_f}* foi enviado para:"
         f"\n`{email_f}`"
         f"{workspace_block}"
-        "\n\nConfira tambem:"
+        "\n\nConfira também:"
         "\n\\- caixa principal"
         "\n\\- spam"
-        "\n\\- promocoes"
+        "\n\\- promoções"
         "\n\\- lixeira"
-        "\n\nAssim que receber o email, aceite o convite e depois abra o ChatGPT para usar o espaco de trabalho\\."
+        "\n\nAssim que receber o email, aceite o convite e depois abra o ChatGPT para usar o espaço de trabalho\\."
     )
     send_telegram_message(telegram_id=telegram_id, message_text=message)
 
@@ -94,7 +94,7 @@ def send_openai_invite_failure_admin_alert(
 ):
     admin_id = settings.ADMIN_TELEGRAM_ID
     if not admin_id:
-        print("AVISO: ADMIN_TELEGRAM_ID nao configurado; alerta de convite nao enviado.")
+        print("AVISO: ADMIN_TELEGRAM_ID não configurado; alerta de convite não enviado.")
         return
 
     status_f = escape_markdown_v2(status)
@@ -102,15 +102,15 @@ def send_openai_invite_failure_admin_alert(
     email_f = escape_markdown_v2(email_cliente)
     job_id_f = escape_markdown_v2(job_id)
     pedido_f = escape_markdown_v2(pedido_id) if pedido_id else "N/A"
-    produto_f = escape_markdown_v2(produto_nome) if produto_nome else "Produto nao identificado"
+    produto_f = escape_markdown_v2(produto_nome) if produto_nome else "Produto não identificado"
     motivo_f = escape_markdown_v2((motivo or "Falha sem detalhe.").strip())
     tentativa_block = ""
     if attempt_count is not None:
         tentativa_block += f"\nTentativa: *{attempt_count}*"
     if next_retry_at:
         retry_f = escape_markdown_v2(next_retry_at)
-        tentativa_block += f"\nProxima tentativa: `{retry_f}`"
-        retry_context = "\n\nDeseja tentar novamente agora? Se nao responder, o sistema tentara automaticamente no horario acima\\."
+        tentativa_block += f"\nPróxima tentativa: `{retry_f}`"
+        retry_context = "\n\nDeseja tentar novamente agora? Se não responder, o sistema tentará automaticamente no horário acima\\."
     else:
         retry_context = "\n\nDeseja tentar novamente agora?"
 
@@ -126,10 +126,10 @@ def send_openai_invite_failure_admin_alert(
     }
 
     message = (
-        "🚨 *Falha no envio automatico de convite*"
+        "🚨 *Falha no envio automático de convite*"
         f"\n\nStatus: *{status_f}*"
         f"\nProduto: *{produto_f}*"
-        f"\nConta\\-mae: `{conta_mae_f}`"
+        f"\nConta\\-mãe: `{conta_mae_f}`"
         f"\nEmail do cliente: `{email_f}`"
         f"\nPedido: `{pedido_f}`"
         f"\nJob: `{job_id_f}`"
@@ -154,7 +154,7 @@ def send_openai_member_removal_failure_admin_alert(
 ):
     admin_id = settings.ADMIN_TELEGRAM_ID
     if not admin_id:
-        print("AVISO: ADMIN_TELEGRAM_ID nao configurado; alerta de remocao nao enviado.")
+        print("AVISO: ADMIN_TELEGRAM_ID não configurado; alerta de remoção não enviado.")
         return
 
     status_f = escape_markdown_v2(status)
@@ -162,20 +162,20 @@ def send_openai_member_removal_failure_admin_alert(
     email_f = escape_markdown_v2(email_cliente)
     job_id_f = escape_markdown_v2(job_id)
     pedido_f = escape_markdown_v2(pedido_id) if pedido_id else "N/A"
-    produto_f = escape_markdown_v2(produto_nome) if produto_nome else "Produto nao identificado"
+    produto_f = escape_markdown_v2(produto_nome) if produto_nome else "Produto não identificado"
     motivo_f = escape_markdown_v2((motivo or "Falha sem detalhe.").strip())
     tentativa_block = ""
     if attempt_count is not None:
         tentativa_block += f"\nTentativa: *{attempt_count}*"
     if next_retry_at:
         retry_f = escape_markdown_v2(next_retry_at)
-        tentativa_block += f"\nProxima tentativa: `{retry_f}`"
+        tentativa_block += f"\nPróxima tentativa: `{retry_f}`"
 
     message = (
-        "🚨 *Falha na remocao automatica do workspace ChatGPT*"
+        "🚨 *Falha na remoção automática do espaço de trabalho ChatGPT*"
         f"\n\nStatus: *{status_f}*"
         f"\nProduto: *{produto_f}*"
-        f"\nConta\\-mae: `{conta_mae_f}`"
+        f"\nConta\\-mãe: `{conta_mae_f}`"
         f"\nEmail do cliente: `{email_f}`"
         f"\nPedido: `{pedido_f}`"
         f"\nJob: `{job_id_f}`"
