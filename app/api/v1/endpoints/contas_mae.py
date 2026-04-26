@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 
 from app.api.v1.deps import get_current_admin_user
 from app.db.database import get_session
-from app.models.conta_mae_models import ContaMae, ContaMaeConvite, ContaMaeInviteJob
+from app.models.conta_mae_models import ContaMae, ContaMaeConvite, ContaMaeInviteJob, ContaMaeMemberRemovalJob
 from app.models.produto_models import Produto
 from app.schemas.conta_mae_schemas import (
     ContaMaeAdminDetails,
@@ -17,6 +17,7 @@ from app.schemas.conta_mae_schemas import (
     ContaMaeConviteRead,
     ContaMaeCreate,
     ContaMaeInviteJobRead,
+    ContaMaeMemberRemovalJobRead,
     ContaMaeSessionPrepareResponse,
     ContaMaeSessionTestResponse,
     ContaMaeUpdate,
@@ -44,6 +45,12 @@ ACTIVE_INVITE_JOB_STATUSES = (
     "PENDING",
     "RUNNING",
     "WAITING_OTP",
+    "RETRY_WAIT",
+    "MANUAL_REVIEW",
+)
+ACTIVE_MEMBER_REMOVAL_JOB_STATUSES = (
+    "PENDING",
+    "RUNNING",
     "RETRY_WAIT",
     "MANUAL_REVIEW",
 )
@@ -114,6 +121,36 @@ def _to_job_read(job: ContaMaeInviteJob) -> ContaMaeInviteJobRead:
     return ContaMaeInviteJobRead(**job_to_schema_payload(job))
 
 
+def _removal_job_to_schema_payload(
+    job: ContaMaeMemberRemovalJob,
+    *,
+    conta_mae_login: Optional[str] = None,
+    convite: Optional[ContaMaeConvite] = None,
+) -> dict:
+    return {
+        "id": job.id,
+        "convite_id": job.convite_id,
+        "conta_mae_id": job.conta_mae_id,
+        "conta_mae_login": conta_mae_login,
+        "pedido_id": job.pedido_id,
+        "email_cliente": job.email_cliente,
+        "status": job.status.value if hasattr(job.status, "value") else str(job.status),
+        "attempt_count": job.attempt_count,
+        "auth_path_used": job.auth_path_used,
+        "last_error": job.last_error,
+        "evidence_path": job.evidence_path,
+        "locked_at": job.locked_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "next_retry_at": job.next_retry_at,
+        "cancelled_at": job.cancelled_at,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+        "aviso_remocao_workspace_enviado_em": convite.aviso_remocao_workspace_enviado_em if convite else None,
+        "removido_workspace_em": convite.removido_workspace_em if convite else None,
+    }
+
+
 @router.get("/invite-jobs", response_model=List[ContaMaeInviteJobRead])
 def list_invite_jobs(
     *,
@@ -145,6 +182,41 @@ def list_invite_jobs(
         payload["conta_mae_login"] = conta_login
         payloads.append(ContaMaeInviteJobRead(**payload))
     return payloads
+
+
+@router.get("/member-removal-jobs", response_model=List[ContaMaeMemberRemovalJobRead])
+def list_member_removal_jobs(
+    *,
+    session: Session = Depends(get_session),
+    conta_mae_id: Optional[uuid.UUID] = None,
+    status: Optional[str] = None,
+    email: Optional[str] = None,
+    only_active: bool = False,
+    limit: int = 100,
+):
+    stmt = (
+        select(ContaMaeMemberRemovalJob, ContaMae.login, ContaMaeConvite)
+        .join(ContaMae, ContaMae.id == ContaMaeMemberRemovalJob.conta_mae_id)
+        .join(ContaMaeConvite, ContaMaeConvite.id == ContaMaeMemberRemovalJob.convite_id)
+        .order_by(ContaMaeMemberRemovalJob.created_at.desc())
+        .limit(min(max(limit, 1), 500))
+    )
+    if conta_mae_id:
+        stmt = stmt.where(ContaMaeMemberRemovalJob.conta_mae_id == conta_mae_id)
+    if status:
+        stmt = stmt.where(ContaMaeMemberRemovalJob.status == status.strip().upper())
+    elif only_active:
+        stmt = stmt.where(ContaMaeMemberRemovalJob.status.in_(ACTIVE_MEMBER_REMOVAL_JOB_STATUSES))
+    if email:
+        stmt = stmt.where(func.lower(ContaMaeMemberRemovalJob.email_cliente).contains(email.strip().lower()))
+
+    rows = session.exec(stmt).all()
+    return [
+        ContaMaeMemberRemovalJobRead(
+            **_removal_job_to_schema_payload(job, conta_mae_login=conta_login, convite=convite)
+        )
+        for job, conta_login, convite in rows
+    ]
 
 
 @router.post("/invite-jobs/{job_id}/retry", response_model=ContaMaeInviteJobRead)

@@ -30,6 +30,7 @@ from app.schemas.conta_mae_schemas import (
     ContaMaeConviteRead,
     ContaMaeCreate,
     ContaMaeInviteJobRead,
+    ContaMaeMemberRemovalJobRead,
     ContaMaeUpdate,
 )
 from app.schemas.email_monitor_schemas import (
@@ -93,6 +94,7 @@ ContaMaeAdminDetails.model_rebuild()
 ContaMaeConviteRead.model_rebuild()
 ContaMaeConviteCreate.model_rebuild()
 ContaMaeInviteJobRead.model_rebuild()
+ContaMaeMemberRemovalJobRead.model_rebuild()
 EmailMonitorAccountRead.model_rebuild()
 EmailMonitorAccountDetail.model_rebuild()
 EmailMonitorRuleRead.model_rebuild()

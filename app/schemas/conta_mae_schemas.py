@@ -64,6 +64,29 @@ class ContaMaeInviteJobRead(SQLModel):
     updated_at: datetime.datetime
 
 
+class ContaMaeMemberRemovalJobRead(SQLModel):
+    id: uuid.UUID
+    convite_id: uuid.UUID
+    conta_mae_id: uuid.UUID
+    conta_mae_login: Optional[str] = None
+    pedido_id: Optional[uuid.UUID] = None
+    email_cliente: str
+    status: str
+    attempt_count: int
+    auth_path_used: Optional[str] = None
+    last_error: Optional[str] = None
+    evidence_path: Optional[str] = None
+    locked_at: Optional[datetime.datetime] = None
+    started_at: Optional[datetime.datetime] = None
+    finished_at: Optional[datetime.datetime] = None
+    next_retry_at: Optional[datetime.datetime] = None
+    cancelled_at: Optional[datetime.datetime] = None
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+    aviso_remocao_workspace_enviado_em: Optional[datetime.datetime] = None
+    removido_workspace_em: Optional[datetime.datetime] = None
+
+
 class ContaMaeSessionPrepareResponse(SQLModel):
     conta_mae_id: uuid.UUID
     session_storage_path: str
