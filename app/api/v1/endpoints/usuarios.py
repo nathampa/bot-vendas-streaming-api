@@ -39,8 +39,9 @@ from app.schemas.usuario_schemas import (
     UsuarioSaldoAjusteResponse,
     UsuarioSaldoHistoricoRead,
 )
-from app.schemas.conta_mae_schemas import ContaMaeInviteJobRead
+from app.schemas.conta_mae_schemas import ContaMaeInviteJobRead, ContaMaeSessionCleanupResponse
 from app.services.conta_mae_invite_service import (
+    cleanup_expired_conta_mae_sessions,
     enqueue_invite_job,
     job_to_schema_payload,
     retry_invite_job,
@@ -607,6 +608,26 @@ def process_openai_workspace_due_removals(
         enqueued_count=len(job_ids),
         job_ids=job_ids,
     )
+
+
+@router.post(
+    "/openai-sessoes/limpar-expiradas",
+    response_model=ContaMaeSessionCleanupResponse,
+)
+def cleanup_expired_openai_sessions(
+    *,
+    session: Session = Depends(get_session),
+    limite: int = 100,
+):
+    try:
+        payload = cleanup_expired_conta_mae_sessions(session, limit=limite)
+        session.commit()
+        return ContaMaeSessionCleanupResponse(**payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Falha ao limpar sessões expiradas: {exc}")
 
 
 @router.post("/openai-invite-jobs/{job_id}/retry-now", response_model=ContaMaeInviteJobRead)

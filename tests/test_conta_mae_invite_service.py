@@ -1,10 +1,14 @@
 import unittest
+import datetime
 import importlib.util
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+from app.services import conta_mae_invite_service as invite_service
 from app.services.conta_mae_invite_service import (
+    conta_mae_session_within_retention,
+    delete_conta_mae_session_storage,
     extract_workspace_name_from_html,
     generate_fstr_workspace_name,
     get_conta_mae_workspace_name,
@@ -48,6 +52,56 @@ class ContaMaeInviteServiceTestCase(unittest.TestCase):
             conta = SimpleNamespace(session_storage_path=session_path)
 
             self.assertEqual(get_conta_mae_workspace_name(conta), "FStr#1234")
+
+    def test_conta_mae_session_within_retention_uses_expiration_plus_30_days(self):
+        reference_date = datetime.date(2026, 4, 26)
+        self.assertTrue(
+            conta_mae_session_within_retention(
+                SimpleNamespace(data_expiracao=datetime.date(2026, 3, 28)),
+                reference_date,
+            )
+        )
+        self.assertFalse(
+            conta_mae_session_within_retention(
+                SimpleNamespace(data_expiracao=datetime.date(2026, 3, 27)),
+                reference_date,
+            )
+        )
+
+    def test_delete_conta_mae_session_storage_removes_directory_inside_session_root(self):
+        original_root = invite_service.settings.OPENAI_INVITE_SESSION_ROOT
+        try:
+            with tempfile.TemporaryDirectory() as root:
+                invite_service.settings.OPENAI_INVITE_SESSION_ROOT = root
+                session_path = Path(root) / "conta_mae_1"
+                session_path.mkdir()
+                (session_path / "state.txt").write_text("ok", encoding="utf-8")
+                conta = SimpleNamespace(session_storage_path=str(session_path))
+
+                result = delete_conta_mae_session_storage(conta)
+
+                self.assertEqual(result["status"], "CLEANED")
+                self.assertIsNone(conta.session_storage_path)
+                self.assertFalse(session_path.exists())
+        finally:
+            invite_service.settings.OPENAI_INVITE_SESSION_ROOT = original_root
+
+    def test_delete_conta_mae_session_storage_skips_paths_outside_session_root(self):
+        original_root = invite_service.settings.OPENAI_INVITE_SESSION_ROOT
+        try:
+            with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as outside_root:
+                invite_service.settings.OPENAI_INVITE_SESSION_ROOT = root
+                session_path = Path(outside_root) / "conta_mae_1"
+                session_path.mkdir()
+                conta = SimpleNamespace(session_storage_path=str(session_path))
+
+                result = delete_conta_mae_session_storage(conta)
+
+                self.assertEqual(result["status"], "SKIPPED")
+                self.assertEqual(conta.session_storage_path, str(session_path))
+                self.assertTrue(session_path.exists())
+        finally:
+            invite_service.settings.OPENAI_INVITE_SESSION_ROOT = original_root
 
 
 class OpenAIInviteHostRunnerExtractionTestCase(unittest.TestCase):

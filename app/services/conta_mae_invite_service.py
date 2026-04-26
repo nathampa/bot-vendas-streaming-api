@@ -228,6 +228,117 @@ def build_session_path(conta_mae: ContaMae) -> str:
     return str(session_root() / f"conta_mae_{conta_mae.id}")
 
 
+def session_retention_cutoff_date(reference_date: datetime.date | None = None) -> datetime.date:
+    today = reference_date or datetime.date.today()
+    return today - datetime.timedelta(days=settings.OPENAI_INVITE_SESSION_RETENTION_DAYS)
+
+
+def conta_mae_session_within_retention(
+    conta_mae: ContaMae,
+    reference_date: datetime.date | None = None,
+) -> bool:
+    if conta_mae.data_expiracao is None:
+        return True
+    return conta_mae.data_expiracao > session_retention_cutoff_date(reference_date)
+
+
+def _path_is_inside_session_root(path: Path) -> bool:
+    try:
+        path.resolve(strict=False).relative_to(session_root().resolve(strict=False))
+        return True
+    except ValueError:
+        return False
+
+
+def delete_conta_mae_session_storage(conta_mae: ContaMae) -> dict:
+    session_storage_path = conta_mae.session_storage_path
+    if not session_storage_path:
+        return {
+            "status": "SKIPPED",
+            "message": "Conta mãe não possui sessão salva.",
+            "session_storage_path": "",
+        }
+
+    session_path = Path(session_storage_path)
+    if not session_path.exists():
+        conta_mae.session_storage_path = None
+        return {
+            "status": "CLEANED",
+            "message": "Sessão não existia mais no disco; referência removida.",
+            "session_storage_path": session_storage_path,
+        }
+
+    if not _path_is_inside_session_root(session_path):
+        return {
+            "status": "SKIPPED",
+            "message": "Caminho da sessão está fora da raiz configurada.",
+            "session_storage_path": session_storage_path,
+        }
+
+    if session_path.is_dir():
+        shutil.rmtree(session_path)
+    else:
+        session_path.unlink()
+
+    conta_mae.session_storage_path = None
+    return {
+        "status": "CLEANED",
+        "message": "Sessão salva removida.",
+        "session_storage_path": session_storage_path,
+    }
+
+
+def cleanup_expired_conta_mae_sessions(session: Session, limit: int = 100) -> dict:
+    if limit < 1:
+        raise ValueError("O limite precisa ser maior ou igual a 1.")
+    if limit > 300:
+        raise ValueError("O limite máximo permitido é 300.")
+
+    retention_days = settings.OPENAI_INVITE_SESSION_RETENTION_DAYS
+    cutoff_date = session_retention_cutoff_date()
+    stmt = (
+        select(ContaMae)
+        .where(ContaMae.session_storage_path != None)
+        .where(ContaMae.data_expiracao != None)
+        .where(ContaMae.data_expiracao <= cutoff_date)
+        .order_by(ContaMae.data_expiracao.asc(), ContaMae.criado_em.asc())
+        .limit(limit)
+    )
+
+    items = []
+    for conta_mae in session.exec(stmt).all():
+        try:
+            result = delete_conta_mae_session_storage(conta_mae)
+        except Exception as exc:
+            result = {
+                "status": "SKIPPED",
+                "message": f"Falha ao remover sessão: {exc}",
+                "session_storage_path": conta_mae.session_storage_path or "",
+            }
+
+        if result["status"] == "CLEANED":
+            session.add(conta_mae)
+
+        items.append(
+            {
+                "conta_mae_id": conta_mae.id,
+                "login": conta_mae.login,
+                "data_expiracao": conta_mae.data_expiracao,
+                "session_storage_path": result["session_storage_path"],
+                "status": result["status"],
+                "message": result["message"],
+            }
+        )
+
+    return {
+        "retention_days": retention_days,
+        "cutoff_date": cutoff_date,
+        "cleaned_count": sum(1 for item in items if item["status"] == "CLEANED"),
+        "skipped_count": sum(1 for item in items if item["status"] != "CLEANED"),
+        "items": items,
+    }
+
+
 def build_evidence_dir(job: ContaMaeInviteJob) -> Path:
     path = evidence_root() / str(job.id)
     path.mkdir(parents=True, exist_ok=True)

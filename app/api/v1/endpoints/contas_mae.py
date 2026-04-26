@@ -18,6 +18,7 @@ from app.schemas.conta_mae_schemas import (
     ContaMaeCreate,
     ContaMaeInviteJobRead,
     ContaMaeMemberRemovalJobRead,
+    ContaMaeSessionCleanupResponse,
     ContaMaeSessionPrepareResponse,
     ContaMaeSessionTestResponse,
     ContaMaeUpdate,
@@ -25,6 +26,7 @@ from app.schemas.conta_mae_schemas import (
 from app.services import security
 from app.services.conta_mae_invite_service import (
     cancel_invite_job,
+    cleanup_expired_conta_mae_sessions,
     create_invite_job_for_convite,
     enqueue_invite_job,
     get_conta_mae_workspace_name,
@@ -349,6 +351,23 @@ def get_contas_mae(session: Session = Depends(get_session)):
         )
         for conta in contas
     ]
+
+
+@router.post("/sessions/cleanup-expired", response_model=ContaMaeSessionCleanupResponse)
+def cleanup_expired_openai_sessions(
+    *,
+    session: Session = Depends(get_session),
+    limit: int = 100,
+):
+    try:
+        payload = cleanup_expired_conta_mae_sessions(session, limit=limit)
+        session.commit()
+        return ContaMaeSessionCleanupResponse(**payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Falha ao limpar sessões expiradas: {exc}")
 
 
 @router.get("/{conta_mae_id}", response_model=ContaMaeAdminDetails)

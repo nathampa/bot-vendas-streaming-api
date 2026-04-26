@@ -105,6 +105,23 @@ class ContaMaeSessionTestResponse(SQLModel):
     evidence_path: Optional[str] = None
 
 
+class ContaMaeSessionCleanupItem(SQLModel):
+    conta_mae_id: uuid.UUID
+    login: str
+    data_expiracao: Optional[datetime.date] = None
+    session_storage_path: str
+    status: str
+    message: str
+
+
+class ContaMaeSessionCleanupResponse(SQLModel):
+    retention_days: int
+    cutoff_date: datetime.date
+    cleaned_count: int
+    skipped_count: int
+    items: List[ContaMaeSessionCleanupItem] = Field(default_factory=list)
+
+
 class ContaMaeAdminRead(SQLModel):
     id: uuid.UUID
     produto_id: uuid.UUID
