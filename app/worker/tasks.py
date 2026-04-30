@@ -9,6 +9,7 @@ from app.services import security # Para descriptografar a nova senha
 from app.services.notification_service import send_telegram_message, escape_markdown_v2
 from app.services.conta_mae_invite_service import process_invite_job
 from app.services.conta_mae_member_removal_service import process_member_removal_job
+from app.services.openai_account_creation_service import process_openai_account_creation_job
 from app.models.base import TipoStatusTicket, TipoResolucaoTicket
 from app.models.usuario_models import Usuario
 from app.models.pedido_models import Pedido
@@ -248,6 +249,28 @@ def process_conta_mae_member_removal_job(job_id: str):
         }
     except Exception as exc:
         print(f"ERRO CRITICO na tarefa 'process_conta_mae_member_removal_job' ({job_id}): {exc}")
+        raise
+    finally:
+        print("=" * 50)
+
+
+@celery_app.task(name="process_openai_account_creation_job")
+def process_openai_account_creation_job_task(job_id: str):
+    print("=" * 50)
+    print("CELERY WORKER: Tarefa 'process_openai_account_creation_job' INICIADA!")
+    print(f"  -> Job ID: {job_id}")
+    try:
+        processed_job = process_openai_account_creation_job(uuid.UUID(job_id))
+        print(
+            "CELERY WORKER: Job de criacao de conta OpenAI concluido. "
+            f"status={processed_job['status']} request_id={processed_job['request_id']}"
+        )
+        return {
+            "job_id": processed_job["id"],
+            "status": processed_job["status"],
+        }
+    except Exception as exc:
+        print(f"ERRO CRITICO na tarefa 'process_openai_account_creation_job' ({job_id}): {exc}")
         raise
     finally:
         print("=" * 50)

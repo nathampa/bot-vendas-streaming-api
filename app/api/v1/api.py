@@ -10,6 +10,7 @@ from app.api.v1.endpoints import (
     email_monitor,
     estoque,
     giftcards,
+    openai_account_creation,
     pedidos,
     produtos,
     recargas,
@@ -44,3 +45,8 @@ api_router.include_router(recargas.admin_router, prefix="/admin/recargas", tags=
 api_router.include_router(configuracoes.router, prefix="/admin/configuracoes", tags=["Admin - Configurações"])
 api_router.include_router(contas_mae.router, prefix="/admin/contas-mae", tags=["Admin - Contas Mãe"])
 api_router.include_router(email_monitor.router, prefix="/admin/email-monitor", tags=["Admin - Email Monitor"])
+api_router.include_router(
+    openai_account_creation.router,
+    prefix="/admin/openai-account-creation",
+    tags=["Admin - Criação OpenAI"],
+)

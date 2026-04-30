@@ -48,6 +48,26 @@ OTP_INPUT_SELECTORS = [
     'input[name*="code"]',
     'input[id*="code"]',
 ]
+SIGNUP_TRIGGER_LABELS = [
+    "sign up",
+    "create account",
+    "get started",
+    "cadastrar",
+    "cadastre",
+    "criar conta",
+]
+CONTINUE_BUTTON_LABELS = [
+    "continue",
+    "next",
+    "proceed",
+    "confirm",
+    "verify",
+    "entrar",
+    "login",
+    "sign in",
+    "sign up",
+    "create account",
+]
 INVITE_INPUT_SELECTORS = [
     'input[placeholder*="email" i]',
     'input[name*="email" i]',
@@ -264,6 +284,20 @@ def click_first_button(page, labels: list[str]) -> bool:
                 return True
         except Exception:
             continue
+    return False
+
+
+def click_first_button_or_link(page, labels: list[str]) -> bool:
+    for label in labels:
+        pattern = re.compile(label, re.IGNORECASE)
+        for role in ("button", "link"):
+            try:
+                control = page.get_by_role(role, name=pattern).first
+                if control.count() > 0 and control.is_visible():
+                    control.click()
+                    return True
+            except Exception:
+                continue
     return False
 
 
@@ -602,6 +636,8 @@ def detect_auth_state(page) -> str:
     if "captcha" in body_text or "verify you are human" in body_text:
         return "captcha_required"
     if "members" in body_text or "invite" in body_text or "workspace" in body_text:
+        return "logged_in"
+    if "welcome" in body_text or "what should we call you" in body_text or "tell us about" in body_text:
         return "logged_in"
     if any(fragment in page.url.lower() for fragment in ("login", "auth", "signin")):
         return "unknown_auth_state"
@@ -1127,7 +1163,7 @@ def launched_host_chrome(request: dict):
             "--remote-debugging-address=127.0.0.1",
             f"--remote-debugging-port={debug_port}",
             f"--user-data-dir={session_path}",
-            request["members_url"],
+            request.get("launch_url") or request["members_url"],
         ]
         process = subprocess.Popen(
             args,
@@ -1262,6 +1298,105 @@ def run_remove_member(request: dict) -> dict:
                 browser.close()
 
 
+def navigate_to_signup_surface(page, launch_url: str) -> None:
+    page.goto(launch_url, wait_until="domcontentloaded")
+    page.wait_for_load_state("domcontentloaded")
+    page.wait_for_timeout(1500)
+    wait_for_spinner_to_settle(page, timeout_ms=3000)
+    click_first_button_or_link(page, SIGNUP_TRIGGER_LABELS)
+    page.wait_for_timeout(1200)
+    wait_for_spinner_to_settle(page, timeout_ms=3000)
+
+
+def submit_default_continue(page) -> None:
+    if not click_first_button_or_link(page, CONTINUE_BUTTON_LABELS):
+        page.keyboard.press("Enter")
+
+
+def run_create_account(request: dict) -> dict:
+    evidence_dir = Path(request["evidence_dir"])
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+
+    with launched_host_chrome(request) as (endpoint, _):
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.connect_over_cdp(endpoint)
+            try:
+                context = browser.contexts[0]
+                page = context.pages[0] if context.pages else context.new_page()
+                navigate_to_signup_surface(page, request["launch_url"])
+                auth_path: list[str] = []
+
+                for _ in range(12):
+                    wait_for_spinner_to_settle(page, timeout_ms=4000)
+                    state = detect_auth_state(page)
+                    if state == "captcha_required":
+                        state = stabilize_challenge_state(page, request["launch_url"])
+                    if state == "captcha_required":
+                        capture(page, evidence_dir, "account_creation_captcha")
+                        write_html_snapshot(page, evidence_dir, "account_creation_captcha")
+                        raise ManualReviewRequired("Captcha detectado no fluxo host-side da OpenAI.")
+                    if state == "email_required":
+                        if not fill_visible(page, EMAIL_INPUT_SELECTORS, request["signup_email"]):
+                            break
+                        auth_path.append("email")
+                        submit_default_continue(page)
+                        page.wait_for_timeout(1500)
+                        continue
+                    if state == "password_required":
+                        if not fill_visible(page, PASSWORD_INPUT_SELECTORS, request["signup_password"]):
+                            break
+                        auth_path.append("password")
+                        submit_default_continue(page)
+                        page.wait_for_timeout(1500)
+                        continue
+                    if state == "otp_required":
+                        if not request.get("otp_code"):
+                            capture(page, evidence_dir, "account_creation_waiting_otp")
+                            html_path = write_html_snapshot(page, evidence_dir, "account_creation_waiting_otp")
+                            return {
+                                "status": "WAITING_OTP_INPUT",
+                                "message": "Conta aguardando codigo OTP informado manualmente no painel.",
+                                "auth_path_used": "_then_".join(auth_path + ["otp_pending"]) if auth_path else "otp_pending",
+                                "evidence_path": html_path or str(evidence_dir),
+                            }
+                        if not fill_visible(page, OTP_INPUT_SELECTORS, request["otp_code"]):
+                            raise ManualReviewRequired("A tela pediu OTP, mas nenhum campo compatível foi encontrado.")
+                        auth_path.append("otp")
+                        submit_default_continue(page)
+                        page.wait_for_timeout(2000)
+                        continue
+                    if state == "logged_in":
+                        capture(page, evidence_dir, "account_created")
+                        html_path = write_html_snapshot(page, evidence_dir, "account_created")
+                        return {
+                            "status": "CREATED",
+                            "message": "Conta OpenAI criada com sucesso.",
+                            "auth_path_used": "_then_".join(auth_path) if auth_path else "session_reused",
+                            "workspace_name": extract_workspace_name(page),
+                            "evidence_path": html_path or str(evidence_dir),
+                        }
+
+                    capture(page, evidence_dir, "account_creation_unknown_state")
+                    html_path = write_html_snapshot(page, evidence_dir, "account_creation_unknown_state")
+                    return {
+                        "status": "MANUAL_REVIEW",
+                        "message": f"Estado nao reconhecido durante a criacao da conta: {state}",
+                        "auth_path_used": "_then_".join(auth_path) if auth_path else None,
+                        "evidence_path": html_path or str(evidence_dir),
+                    }
+
+                capture(page, evidence_dir, "account_creation_exhausted")
+                html_path = write_html_snapshot(page, evidence_dir, "account_creation_exhausted")
+                return {
+                    "status": "MANUAL_REVIEW",
+                    "message": "Fluxo de criacao de conta OpenAI nao convergiu para um estado final reconhecido.",
+                    "auth_path_used": "_then_".join(auth_path) if auth_path else None,
+                    "evidence_path": html_path or str(evidence_dir),
+                }
+            finally:
+                browser.close()
+
+
 def process_request_payload(request: dict) -> dict:
     action = request.get("action")
     if action == "session_test":
@@ -1270,6 +1405,8 @@ def process_request_payload(request: dict) -> dict:
         return run_send_invite(request)
     if action == "remove_member":
         return run_remove_member(request)
+    if action == "create_account":
+        return run_create_account(request)
     raise HostRunnerError(f"Ação desconhecida para o runner host-side: {action}")
 
 

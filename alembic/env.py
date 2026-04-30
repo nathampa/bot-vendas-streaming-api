@@ -19,6 +19,7 @@ from app.models.suporte_models import *
 from app.models.configuracao_models import *
 from app.models.conta_mae_models import *
 from app.models.email_monitor_models import *
+from app.models.openai_account_creation_models import *
 
 from logging.config import fileConfig
 

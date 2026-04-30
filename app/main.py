@@ -18,6 +18,7 @@ from app.models.email_monitor_models import (
     EmailMonitorRule,
     EmailMonitorSyncRun,
 )
+from app.models.openai_account_creation_models import OpenAIAccountCreationJob, OpenAIAccountCreationRequest
 from app.models.pedido_models import Pedido
 from app.models.produto_models import EstoqueConta, Produto
 from app.models.suporte_models import GiftCard, TicketSuporte
@@ -50,6 +51,13 @@ from app.schemas.email_monitor_schemas import (
     EmailMonitorSyncFailureItem,
     EmailMonitorSyncResult,
 )
+from app.schemas.openai_account_creation_schemas import (
+    OpenAIAccountCreationBatchCreateRequest,
+    OpenAIAccountCreationBatchCreateResponse,
+    OpenAIAccountCreationJobRead,
+    OpenAIAccountCreationOTPSubmitRequest,
+    OpenAIAccountCreationRetryResponse,
+)
 from app.schemas.pedido_schemas import PedidoAdminConta, PedidoAdminDetails, PedidoAdminList, PedidoAdminContaMae
 from app.schemas.produto_schemas import ProdutoAdminRead, ProdutoCreate, ProdutoRead, ProdutoUpdate
 from app.services.email_monitor_service import start_scheduler
@@ -76,6 +84,8 @@ EmailMonitorMessage.model_rebuild()
 EmailMonitorMessageMatch.model_rebuild()
 EmailMonitorAlertEvent.model_rebuild()
 EmailMonitorSyncRun.model_rebuild()
+OpenAIAccountCreationRequest.model_rebuild()
+OpenAIAccountCreationJob.model_rebuild()
 
 ProdutoRead.model_rebuild()
 ProdutoCreate.model_rebuild()
@@ -110,6 +120,11 @@ EmailMonitorMessageDetail.model_rebuild()
 EmailMonitorSyncResult.model_rebuild()
 EmailMonitorSyncBatchResponse.model_rebuild()
 EmailMonitorAuditLogRead.model_rebuild()
+OpenAIAccountCreationBatchCreateRequest.model_rebuild()
+OpenAIAccountCreationBatchCreateResponse.model_rebuild()
+OpenAIAccountCreationJobRead.model_rebuild()
+OpenAIAccountCreationOTPSubmitRequest.model_rebuild()
+OpenAIAccountCreationRetryResponse.model_rebuild()
 print("Modelos e schemas reconstruídos com sucesso.")
 
 _scheduler_stop_event = threading.Event()
