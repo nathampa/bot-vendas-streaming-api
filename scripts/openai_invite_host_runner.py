@@ -1813,23 +1813,63 @@ def ensure_outlook_inbox_ready(page) -> None:
 def extract_outlook_openai_otp(page) -> str | None:
     if not is_outlook_mail_experience(page):
         return None
+    targeted_selectors = [
+        '[data-test-id="mailMessageBodyContainer"]',
+        '[aria-label="Message body"]',
+        '[id^="UniqueMessageBody_"]',
+    ]
+    for selector in targeted_selectors:
+        try:
+            locator = page.locator(selector).first
+            if locator.count() > 0 and locator.is_visible():
+                text = locator.inner_text(timeout=3000)
+                matches = OTP_REGEX.findall(text or "")
+                if matches:
+                    return matches[-1]
+        except Exception:
+            continue
     page_body = outlook_body_text(page, timeout_ms=3000)
-    match = OTP_REGEX.search(page_body or "")
-    if match:
-        return match.group(1)
+    matches = OTP_REGEX.findall(page_body or "")
+    if matches:
+        return matches[-1]
     try:
         html_content = page.content()
     except Exception:
         html_content = ""
-    match = OTP_REGEX.search(html_content or "")
-    if match:
-        return match.group(1)
+    matches = OTP_REGEX.findall(html_content or "")
+    if matches:
+        return matches[-1]
     return None
+
+
+def open_visible_outlook_message_row(page) -> bool:
+    if not is_outlook_mail_experience(page):
+        return False
+    try:
+        rows = page.locator('[role="option"][data-focusable-row="true"]')
+        count = min(rows.count(), 20)
+    except Exception:
+        return False
+
+    for index in range(count):
+        try:
+            row = rows.nth(index)
+            aria_label = (row.get_attribute("aria-label") or "").lower()
+            if not any(marker in aria_label for marker in ("openai", "chatgpt", "verification code", "temporary verification code")):
+                continue
+            row.click()
+            page.wait_for_timeout(2500)
+            return True
+        except Exception:
+            continue
+    return False
 
 
 def open_first_matching_outlook_message(page) -> bool:
     if not is_outlook_mail_experience(page):
         return False
+    if open_visible_outlook_message_row(page):
+        return True
     for pattern in (
         re.compile(r"openai", re.IGNORECASE),
         re.compile(r"chatgpt", re.IGNORECASE),
@@ -1850,6 +1890,8 @@ def open_first_matching_outlook_message(page) -> bool:
 def search_and_open_outlook_mail(page) -> bool:
     if not is_outlook_mail_experience(page):
         return False
+    if open_visible_outlook_message_row(page):
+        return True
     search = first_visible_locator(page, OUTLOOK_SEARCH_INPUT_SELECTORS)
     if search:
         for term in ("OpenAI", "ChatGPT", "verification code"):
@@ -1857,6 +1899,8 @@ def search_and_open_outlook_mail(page) -> bool:
                 search.fill(term)
                 page.keyboard.press("Enter")
                 page.wait_for_timeout(2500)
+                if open_visible_outlook_message_row(page):
+                    return True
                 if open_first_matching_outlook_message(page):
                     return True
             except Exception:
