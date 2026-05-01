@@ -14,15 +14,22 @@ from app.models.openai_account_creation_models import (
 from app.schemas.openai_account_creation_schemas import (
     OpenAIAccountCreationBatchCreateRequest,
     OpenAIAccountCreationBatchCreateResponse,
+    OpenAIAccountCreationFetchOtpResponse,
     OpenAIAccountCreationJobRead,
+    OpenAIAccountCreationOutlookCredentialsBatchRequest,
+    OpenAIAccountCreationOutlookCredentialsBatchResponse,
     OpenAIAccountCreationOTPSubmitRequest,
+    OpenAIAccountCreationRequestRead,
     OpenAIAccountCreationRetryResponse,
 )
 from app.services.openai_account_creation_service import (
+    attach_outlook_credentials_to_requests,
     cancel_openai_account_creation_job,
     create_account_creation_request_and_job,
     enqueue_openai_account_creation_job,
+    fetch_outlook_otp_for_job,
     job_to_schema_payload,
+    request_to_schema_payload,
     retry_openai_account_creation_job,
     submit_openai_account_creation_otp,
     validate_batch_item,
@@ -63,7 +70,13 @@ def create_batch_openai_account_jobs(
             ignored_items.append(email)
             continue
 
-        request, job = create_account_creation_request_and_job(session, email=email, senha=senha)
+        request, job = create_account_creation_request_and_job(
+            session,
+            email=email,
+            senha=senha,
+            outlook_email=item.outlook_email,
+            outlook_senha=item.outlook_senha,
+        )
         created_requests += 1
         created_jobs += 1
         created_job_reads.append(_to_job_read(job, request))
@@ -81,6 +94,32 @@ def create_batch_openai_account_jobs(
         created_jobs=created_jobs,
         ignored_items=ignored_items,
         jobs=created_job_reads,
+    )
+
+
+@router.post("/credentials/outlook/batch", response_model=OpenAIAccountCreationOutlookCredentialsBatchResponse)
+def attach_outlook_credentials_batch(
+    *,
+    payload: OpenAIAccountCreationOutlookCredentialsBatchRequest,
+    session: Session = Depends(get_session),
+):
+    items = [
+        {
+            "email": item.email,
+            "outlook_email": item.outlook_email,
+            "outlook_senha": item.outlook_senha,
+        }
+        for item in payload.items
+    ]
+    updated_requests, ignored_items = attach_outlook_credentials_to_requests(session, items=items)
+    session.commit()
+    for request in updated_requests:
+        session.refresh(request)
+
+    return OpenAIAccountCreationOutlookCredentialsBatchResponse(
+        updated_requests=len(updated_requests),
+        ignored_items=ignored_items,
+        requests=[OpenAIAccountCreationRequestRead(**request_to_schema_payload(request)) for request in updated_requests],
     )
 
 
@@ -156,6 +195,34 @@ def submit_openai_account_creation_job_otp(
         return OpenAIAccountCreationRetryResponse(
             message="Codigo OTP recebido. O job foi reenfileirado.",
             job=_to_job_read(job, request),
+        )
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/jobs/{job_id}/fetch-outlook-otp", response_model=OpenAIAccountCreationFetchOtpResponse)
+def fetch_outlook_otp_for_openai_account_creation_job(
+    *,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+    job_id: uuid.UUID,
+):
+    job = session.get(OpenAIAccountCreationJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job de criacao de conta OpenAI nao encontrado.")
+
+    try:
+        message, fetch_status, refreshed_job = fetch_outlook_otp_for_job(
+            session,
+            job,
+            background_tasks=background_tasks,
+        )
+        request = session.get(OpenAIAccountCreationRequest, refreshed_job.request_id)
+        return OpenAIAccountCreationFetchOtpResponse(
+            message=message,
+            fetch_status=fetch_status,
+            job=_to_job_read(refreshed_job, request),
         )
     except Exception as exc:
         session.rollback()

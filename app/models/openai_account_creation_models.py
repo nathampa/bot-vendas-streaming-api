@@ -33,6 +33,8 @@ class OpenAIAccountCreationRequest(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     email: str = Field(nullable=False, index=True)
     senha_encrypted: str = Field(nullable=False, max_length=1200)
+    outlook_email: Optional[str] = Field(default=None, nullable=True, index=True, max_length=255)
+    outlook_password_encrypted: Optional[str] = Field(default=None, nullable=True, max_length=1200)
     session_storage_path: Optional[str] = Field(default=None, nullable=True, max_length=500)
     workspace_name: Optional[str] = Field(default=None, nullable=True, max_length=120)
     status_atual: OpenAIAccountCreationRequestStatus = Field(

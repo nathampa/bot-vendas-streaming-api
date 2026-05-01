@@ -30,14 +30,43 @@ class OpenAIAccountCreationManualReviewRequired(OpenAIAccountCreationError):
 
 
 EMAIL_REGEX = re.compile(r"^[A-Za-z0-9_.+\-]+@[A-Za-z0-9\-]+\.[A-Za-z0-9.\-]+$")
+MAX_ERROR_LENGTH = 500
+MAX_AUTH_PATH_LENGTH = 80
 
 
 def utcnow() -> datetime.datetime:
     return datetime.datetime.utcnow()
 
 
+def normalize_error_message(message: str | None) -> str | None:
+    if message is None:
+        return None
+    value = re.sub(r"\s+", " ", str(message)).strip()
+    if len(value) <= MAX_ERROR_LENGTH:
+        return value
+    return value[: MAX_ERROR_LENGTH - 3] + "..."
+
+
+def normalize_auth_path(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = re.sub(r"\s+", " ", str(value)).strip()
+    if len(normalized) <= MAX_AUTH_PATH_LENGTH:
+        return normalized
+    return normalized[: MAX_AUTH_PATH_LENGTH - 3] + "..."
+
+
 def slugify(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_.-]+", "_", value).strip("_") or "default"
+
+
+def normalize_optional_email(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    return normalized
 
 
 def account_creation_session_root() -> Path:
@@ -48,6 +77,12 @@ def account_creation_session_root() -> Path:
 
 def account_creation_evidence_root() -> Path:
     root = Path(settings.OPENAI_ACCOUNT_CREATION_EVIDENCE_ROOT)
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def account_creation_outlook_profile_root() -> Path:
+    root = Path(settings.OPENAI_ACCOUNT_CREATION_OUTLOOK_PROFILE_ROOT)
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -63,6 +98,11 @@ def build_request_evidence_dir(job: OpenAIAccountCreationJob) -> Path:
     path = account_creation_evidence_root() / str(job.id)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def build_request_outlook_profile_path(request: OpenAIAccountCreationRequest) -> str:
+    email_part = slugify((request.outlook_email or request.email).split("@", 1)[0].lower())
+    return str(account_creation_outlook_profile_root() / f"outlook_{email_part}_{str(request.id)[:8]}")
 
 
 def account_creation_retry_cooldowns_seconds() -> list[int]:
@@ -102,6 +142,8 @@ def request_to_schema_payload(request: OpenAIAccountCreationRequest) -> dict:
     return {
         "id": request.id,
         "email": request.email,
+        "outlook_email": request.outlook_email,
+        "has_outlook_password": bool(request.outlook_password_encrypted),
         "session_storage_path": request.session_storage_path,
         "workspace_name": request.workspace_name,
         "status_atual": request.status_atual.value if hasattr(request.status_atual, "value") else str(request.status_atual),
@@ -131,6 +173,8 @@ def job_to_schema_payload(job: OpenAIAccountCreationJob) -> dict:
         "created_at": job.created_at,
         "updated_at": job.updated_at,
         "request_status_atual": request.status_atual.value if request and hasattr(request.status_atual, "value") else (str(request.status_atual) if request else None),
+        "outlook_email": request.outlook_email if request else None,
+        "has_outlook_password": bool(request.outlook_password_encrypted) if request else False,
         "session_storage_path": request.session_storage_path if request else None,
         "workspace_name": request.workspace_name if request else None,
     }
@@ -141,10 +185,14 @@ def create_account_creation_request_and_job(
     *,
     email: str,
     senha: str,
+    outlook_email: str | None = None,
+    outlook_senha: str | None = None,
 ) -> tuple[OpenAIAccountCreationRequest, OpenAIAccountCreationJob]:
     request = OpenAIAccountCreationRequest(
         email=email.strip().lower(),
         senha_encrypted=encrypt_data(senha.strip()),
+        outlook_email=normalize_optional_email(outlook_email),
+        outlook_password_encrypted=encrypt_data(outlook_senha.strip()) if outlook_senha and outlook_senha.strip() else None,
         status_atual=OpenAIAccountCreationRequestStatus.PENDING,
     )
     session.add(request)
@@ -160,6 +208,39 @@ def create_account_creation_request_and_job(
     session.add(job)
     session.flush()
     return request, job
+
+
+def attach_outlook_credentials_to_requests(
+    session: Session,
+    *,
+    items: list[dict[str, str | None]],
+) -> tuple[list[OpenAIAccountCreationRequest], list[str]]:
+    updated_requests: list[OpenAIAccountCreationRequest] = []
+    ignored_items: list[str] = []
+
+    for item in items:
+        email = (item.get("email") or "").strip().lower()
+        outlook_senha = (item.get("outlook_senha") or "").strip()
+        outlook_email = normalize_optional_email(item.get("outlook_email"))
+        if not email or not outlook_senha:
+            ignored_items.append(email or "<email-vazio>")
+            continue
+
+        request = session.exec(
+            select(OpenAIAccountCreationRequest).where(OpenAIAccountCreationRequest.email == email)
+        ).first()
+        if not request:
+            ignored_items.append(email)
+            continue
+
+        request.outlook_email = outlook_email
+        request.outlook_password_encrypted = encrypt_data(outlook_senha)
+        request.atualizado_em = utcnow()
+        session.add(request)
+        updated_requests.append(request)
+
+    session.flush()
+    return updated_requests, ignored_items
 
 
 def process_openai_account_creation_job_task(job_id: str) -> None:
@@ -232,6 +313,34 @@ def build_host_runner_account_creation_request(
     }
 
 
+def resolve_outlook_credentials(request: OpenAIAccountCreationRequest) -> tuple[str, str]:
+    outlook_email = normalize_optional_email(request.outlook_email) or request.email
+    encrypted_password = request.outlook_password_encrypted or request.senha_encrypted
+    password = decrypt_data(encrypted_password) if encrypted_password else None
+    if not password:
+        raise OpenAIAccountCreationManualReviewRequired(
+            "Nao foi possivel descriptografar a senha da conta Outlook vinculada."
+        )
+    return outlook_email, password
+
+
+def build_host_runner_outlook_fetch_request(
+    job: OpenAIAccountCreationJob,
+    request: OpenAIAccountCreationRequest,
+) -> dict:
+    outlook_email, outlook_password = resolve_outlook_credentials(request)
+    evidence_dir = build_request_evidence_dir(job) / "outlook_otp"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    return {
+        "action": "fetch_outlook_otp",
+        "job_id": str(job.id),
+        "outlook_email": outlook_email,
+        "outlook_password": outlook_password,
+        "profile_dir": build_request_outlook_profile_path(request),
+        "evidence_dir": str(evidence_dir),
+    }
+
+
 def run_openai_account_creation_automation(
     job: OpenAIAccountCreationJob,
     request: OpenAIAccountCreationRequest,
@@ -241,6 +350,57 @@ def run_openai_account_creation_automation(
     if status in {"CREATED", "WAITING_OTP_INPUT", "MANUAL_REVIEW", "FAILED"}:
         return result
     raise OpenAIAccountCreationError(result.get("message") or "Runner host-side retornou um estado invalido na criacao de conta.")
+
+
+def fetch_outlook_otp_for_job(
+    session: Session,
+    job: OpenAIAccountCreationJob,
+    *,
+    background_tasks: Optional[BackgroundTasks] = None,
+) -> tuple[str, str, OpenAIAccountCreationJob]:
+    if job.status != OpenAIAccountCreationJobStatus.WAITING_OTP_INPUT:
+        raise OpenAIAccountCreationManualReviewRequired("Este job nao esta aguardando OTP manual.")
+
+    request = session.get(OpenAIAccountCreationRequest, job.request_id)
+    if not request:
+        raise OpenAIAccountCreationManualReviewRequired("Requisicao de criacao de conta OpenAI nao encontrada.")
+
+    result = execute_host_runner_request(build_host_runner_outlook_fetch_request(job, request))
+    result_status = (result.get("status") or "FAILED").upper()
+    result_message = normalize_error_message(result.get("message"))
+    refreshed_job = session.get(OpenAIAccountCreationJob, job.id)
+    refreshed_request = session.get(OpenAIAccountCreationRequest, request.id)
+    if not refreshed_job or not refreshed_request:
+        raise OpenAIAccountCreationManualReviewRequired("Job indisponivel apos o fetch de OTP do Outlook.")
+
+    refreshed_job.evidence_path = result.get("evidence_path") or refreshed_job.evidence_path
+
+    if result_status == "OTP_FOUND":
+        otp_code = re.sub(r"\D+", "", result.get("otp_code") or "")
+        if len(otp_code) != 6:
+            raise OpenAIAccountCreationManualReviewRequired(
+                "O fetch do Outlook retornou um OTP invalido."
+            )
+        submit_openai_account_creation_otp(session, refreshed_job, otp_code)
+        refreshed_job.evidence_path = result.get("evidence_path") or refreshed_job.evidence_path
+        session.add(refreshed_job)
+        session.commit()
+        session.refresh(refreshed_job)
+        enqueue_openai_account_creation_job(refreshed_job.id, background_tasks=background_tasks)
+        return "OTP encontrado no Outlook e job reenfileirado.", result_status, refreshed_job
+
+    refreshed_job.last_error = result_message or (
+        "Nao foi possivel localizar um OTP visivel da OpenAI no Outlook."
+        if result_status == "OTP_NOT_FOUND"
+        else "Falha ao buscar OTP no Outlook."
+    )
+    refreshed_job.updated_at = utcnow()
+    session.add(refreshed_job)
+    refreshed_request.ultimo_erro = refreshed_job.last_error
+    session.add(refreshed_request)
+    session.commit()
+    session.refresh(refreshed_job)
+    return refreshed_job.last_error, result_status, refreshed_job
 
 
 def retry_openai_account_creation_job(
@@ -326,6 +486,7 @@ def schedule_openai_account_creation_retry_or_manual_review(
     *,
     error_message: str,
 ) -> dict:
+    error_message = normalize_error_message(error_message)
     now = utcnow()
     deadline = account_creation_retry_deadline(job)
     remaining_seconds = int((deadline - now).total_seconds())
@@ -376,7 +537,7 @@ def process_openai_account_creation_job(job_id: uuid.UUID) -> dict:
         request = session.get(OpenAIAccountCreationRequest, job.request_id)
         if not request:
             job.status = OpenAIAccountCreationJobStatus.FAILED
-            job.last_error = "Requisicao de criacao de conta nao encontrada."
+            job.last_error = normalize_error_message("Requisicao de criacao de conta nao encontrada.")
             session.add(job)
             session.commit()
             session.refresh(job)
@@ -407,13 +568,13 @@ def process_openai_account_creation_job(job_id: uuid.UUID) -> dict:
                 raise OpenAIAccountCreationError("Job ou requisicao indisponivel apos automacao.")
 
             result_status = (result.get("status") or "").upper()
-            result_message = result.get("message")
+            result_message = normalize_error_message(result.get("message"))
 
             if result_status == "WAITING_OTP_INPUT":
                 refreshed_job.status = OpenAIAccountCreationJobStatus.WAITING_OTP_INPUT
                 refreshed_job.last_error = result_message
                 refreshed_job.evidence_path = result.get("evidence_path") or str(build_request_evidence_dir(refreshed_job))
-                refreshed_job.auth_path_used = result.get("auth_path_used")
+                refreshed_job.auth_path_used = normalize_auth_path(result.get("auth_path_used"))
                 refreshed_job.locked_at = None
                 refreshed_job.finished_at = utcnow()
                 session.add(refreshed_job)
@@ -426,7 +587,7 @@ def process_openai_account_creation_job(job_id: uuid.UUID) -> dict:
 
             if result_status == "CREATED":
                 refreshed_job.status = OpenAIAccountCreationJobStatus.CREATED
-                refreshed_job.auth_path_used = result.get("auth_path_used")
+                refreshed_job.auth_path_used = normalize_auth_path(result.get("auth_path_used"))
                 refreshed_job.last_error = None
                 refreshed_job.evidence_path = result.get("evidence_path") or str(build_request_evidence_dir(refreshed_job))
                 refreshed_job.locked_at = None
@@ -466,6 +627,7 @@ def process_openai_account_creation_job(job_id: uuid.UUID) -> dict:
             session.refresh(refreshed_job)
             return job_to_schema_payload(refreshed_job)
         except Exception as exc:
+            session.rollback()
             refreshed_job = session.get(OpenAIAccountCreationJob, job_id)
             refreshed_request = session.get(OpenAIAccountCreationRequest, request.id)
             if not refreshed_job or not refreshed_request:
@@ -475,17 +637,18 @@ def process_openai_account_creation_job(job_id: uuid.UUID) -> dict:
                     session,
                     refreshed_job,
                     refreshed_request,
-                    error_message=str(exc),
+                    error_message=normalize_error_message(str(exc)),
                 )
+            normalized_error = normalize_error_message(str(exc))
             refreshed_job.status = OpenAIAccountCreationJobStatus.FAILED
-            refreshed_job.last_error = str(exc)
+            refreshed_job.last_error = normalized_error
             refreshed_job.evidence_path = str(build_request_evidence_dir(refreshed_job))
             refreshed_job.locked_at = None
             refreshed_job.finished_at = utcnow()
             refreshed_job.next_retry_at = None
             session.add(refreshed_job)
             refreshed_request.status_atual = OpenAIAccountCreationRequestStatus.FAILED
-            refreshed_request.ultimo_erro = str(exc)
+            refreshed_request.ultimo_erro = normalized_error
             session.add(refreshed_request)
             session.commit()
             session.refresh(refreshed_job)

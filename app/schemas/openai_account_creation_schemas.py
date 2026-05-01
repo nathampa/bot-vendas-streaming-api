@@ -8,6 +8,8 @@ from sqlmodel import SQLModel
 class OpenAIAccountCreationBatchItem(SQLModel):
     email: str
     senha: str
+    outlook_email: Optional[str] = None
+    outlook_senha: Optional[str] = None
 
 
 class OpenAIAccountCreationBatchCreateRequest(SQLModel):
@@ -24,6 +26,8 @@ class OpenAIAccountCreationBatchCreateResponse(SQLModel):
 class OpenAIAccountCreationRequestRead(SQLModel):
     id: uuid.UUID
     email: str
+    outlook_email: Optional[str] = None
+    has_outlook_password: bool = False
     session_storage_path: Optional[str] = None
     workspace_name: Optional[str] = None
     status_atual: str
@@ -50,6 +54,8 @@ class OpenAIAccountCreationJobRead(SQLModel):
     created_at: datetime.datetime
     updated_at: datetime.datetime
     request_status_atual: str
+    outlook_email: Optional[str] = None
+    has_outlook_password: bool = False
     session_storage_path: Optional[str] = None
     workspace_name: Optional[str] = None
 
@@ -58,8 +64,30 @@ class OpenAIAccountCreationOTPSubmitRequest(SQLModel):
     otp_code: str
 
 
+class OpenAIAccountCreationOutlookCredentialsBatchItem(SQLModel):
+    email: str
+    outlook_email: Optional[str] = None
+    outlook_senha: str
+
+
+class OpenAIAccountCreationOutlookCredentialsBatchRequest(SQLModel):
+    items: List[OpenAIAccountCreationOutlookCredentialsBatchItem]
+
+
+class OpenAIAccountCreationOutlookCredentialsBatchResponse(SQLModel):
+    updated_requests: int
+    ignored_items: List[str]
+    requests: List[OpenAIAccountCreationRequestRead]
+
+
 class OpenAIAccountCreationRetryResponse(SQLModel):
     message: str
+    job: OpenAIAccountCreationJobRead
+
+
+class OpenAIAccountCreationFetchOtpResponse(SQLModel):
+    message: str
+    fetch_status: str
     job: OpenAIAccountCreationJobRead
 
 

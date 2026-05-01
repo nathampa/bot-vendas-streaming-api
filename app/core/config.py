@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     OPENAI_ACCOUNT_CREATION_SIGNUP_URL: str = "https://chatgpt.com/auth/login"
     OPENAI_ACCOUNT_CREATION_SESSION_ROOT: str = "/opt/bot-vendas/runtime/openai-account-creation-sessions"
     OPENAI_ACCOUNT_CREATION_EVIDENCE_ROOT: str = "/opt/bot-vendas/runtime/openai-account-creation-evidence"
+    OPENAI_ACCOUNT_CREATION_OUTLOOK_PROFILE_ROOT: str = "/opt/bot-vendas/runtime/outlook-otp-profiles"
     OPENAI_ACCOUNT_CREATION_RETRY_WINDOW_SECONDS: int = 14400
     OPENAI_ACCOUNT_CREATION_RETRY_COOLDOWNS_SECONDS: str = "300,600,900,1200,1800"
     OPENAI_WORKSPACE_MEMBER_WARNING_DAYS: int = 30
