@@ -27,10 +27,11 @@ from app.services.openai_account_creation_service import (
     cancel_openai_account_creation_job,
     create_account_creation_request_and_job,
     enqueue_openai_account_creation_job,
-    fetch_outlook_otp_for_job,
+    enqueue_openai_account_creation_outlook_fetch_job,
     job_to_schema_payload,
     request_to_schema_payload,
     retry_openai_account_creation_job,
+    start_openai_account_creation_outlook_fetch,
     submit_openai_account_creation_otp,
     validate_batch_item,
 )
@@ -213,16 +214,15 @@ def fetch_outlook_otp_for_openai_account_creation_job(
         raise HTTPException(status_code=404, detail="Job de criacao de conta OpenAI nao encontrado.")
 
     try:
-        message, fetch_status, refreshed_job = fetch_outlook_otp_for_job(
-            session,
-            job,
-            background_tasks=background_tasks,
-        )
-        request = session.get(OpenAIAccountCreationRequest, refreshed_job.request_id)
+        started_job = start_openai_account_creation_outlook_fetch(session, job)
+        session.commit()
+        session.refresh(started_job)
+        enqueue_openai_account_creation_outlook_fetch_job(started_job.id, background_tasks=background_tasks)
+        request = session.get(OpenAIAccountCreationRequest, started_job.request_id)
         return OpenAIAccountCreationFetchOtpResponse(
-            message=message,
-            fetch_status=fetch_status,
-            job=_to_job_read(refreshed_job, request),
+            message="Busca de OTP Outlook iniciada. Atualize a fila em instantes para ver o resultado.",
+            fetch_status="FETCH_STARTED",
+            job=_to_job_read(started_job, request),
         )
     except Exception as exc:
         session.rollback()

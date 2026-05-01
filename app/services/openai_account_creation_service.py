@@ -254,6 +254,17 @@ def process_openai_account_creation_job_task(job_id: str) -> None:
         print(f"ERRO CRITICO na tarefa local de criacao de conta OpenAI ({job_id}): {exc}")
 
 
+def fetch_openai_account_creation_outlook_otp_task(job_id: str) -> None:
+    try:
+        result = process_openai_account_creation_outlook_fetch(uuid.UUID(job_id))
+        print(
+            "BACKGROUND TASK: Fetch Outlook OTP processado. "
+            f"id={result['id']} status={result['status']}"
+        )
+    except Exception as exc:
+        print(f"ERRO CRITICO na tarefa local de fetch Outlook OTP ({job_id}): {exc}")
+
+
 def enqueue_openai_account_creation_job(
     job_id: uuid.UUID,
     *,
@@ -289,6 +300,30 @@ def enqueue_openai_account_creation_job(
         target=thread_target,
         daemon=True,
         name=f"openai-account-create-{job_id}",
+    ).start()
+
+
+def enqueue_openai_account_creation_outlook_fetch_job(
+    job_id: uuid.UUID,
+    *,
+    background_tasks: Optional[BackgroundTasks] = None,
+) -> None:
+    if not settings.OPENAI_ACCOUNT_CREATION_ENABLED:
+        return
+    if settings.CELERY_BROKER_URL:
+        from app.worker.celery_app import celery_app
+
+        celery_app.send_task("process_openai_account_creation_outlook_fetch_job", args=[str(job_id)])
+        return
+    if background_tasks is not None:
+        background_tasks.add_task(fetch_openai_account_creation_outlook_otp_task, str(job_id))
+        return
+
+    threading.Thread(
+        target=fetch_openai_account_creation_outlook_otp_task,
+        args=(str(job_id),),
+        daemon=True,
+        name=f"openai-account-fetch-otp-{job_id}",
     ).start()
 
 
@@ -394,6 +429,7 @@ def fetch_outlook_otp_for_job(
         if result_status == "OTP_NOT_FOUND"
         else "Falha ao buscar OTP no Outlook."
     )
+    refreshed_job.locked_at = None
     refreshed_job.updated_at = utcnow()
     session.add(refreshed_job)
     refreshed_request.ultimo_erro = refreshed_job.last_error
@@ -524,6 +560,33 @@ def schedule_openai_account_creation_retry_or_manual_review(
     return job_to_schema_payload(job)
 
 
+def start_openai_account_creation_outlook_fetch(
+    session: Session,
+    job: OpenAIAccountCreationJob,
+) -> OpenAIAccountCreationJob:
+    if job.status != OpenAIAccountCreationJobStatus.WAITING_OTP_INPUT:
+        raise OpenAIAccountCreationManualReviewRequired("Este job nao esta aguardando OTP manual.")
+    if job.locked_at is not None:
+        raise OpenAIAccountCreationManualReviewRequired("Ja existe uma busca de OTP Outlook em andamento para este job.")
+
+    request = session.get(OpenAIAccountCreationRequest, job.request_id)
+    if not request:
+        raise OpenAIAccountCreationManualReviewRequired("Requisicao de criacao de conta OpenAI nao encontrada.")
+
+    resolve_outlook_credentials(request)
+
+    now = utcnow()
+    job.locked_at = now
+    job.last_error = "Busca de OTP Outlook iniciada pelo painel."
+    job.updated_at = now
+    session.add(job)
+    request.ultimo_erro = job.last_error
+    request.atualizado_em = now
+    session.add(request)
+    session.flush()
+    return job
+
+
 def process_openai_account_creation_job(job_id: uuid.UUID) -> dict:
     with Session(engine) as session:
         job = session.get(OpenAIAccountCreationJob, job_id)
@@ -650,6 +713,37 @@ def process_openai_account_creation_job(job_id: uuid.UUID) -> dict:
             refreshed_request.status_atual = OpenAIAccountCreationRequestStatus.FAILED
             refreshed_request.ultimo_erro = normalized_error
             session.add(refreshed_request)
+            session.commit()
+            session.refresh(refreshed_job)
+            return job_to_schema_payload(refreshed_job)
+
+
+def process_openai_account_creation_outlook_fetch(job_id: uuid.UUID) -> dict:
+    with Session(engine) as session:
+        job = session.get(OpenAIAccountCreationJob, job_id)
+        if not job:
+            raise OpenAIAccountCreationError(f"Job {job_id} nao encontrado.")
+        if job.status != OpenAIAccountCreationJobStatus.WAITING_OTP_INPUT:
+            return job_to_schema_payload(job)
+
+        try:
+            _, _, refreshed_job = fetch_outlook_otp_for_job(session, job)
+            return job_to_schema_payload(refreshed_job)
+        except Exception as exc:
+            session.rollback()
+            refreshed_job = session.get(OpenAIAccountCreationJob, job_id)
+            if not refreshed_job:
+                raise
+            request = session.get(OpenAIAccountCreationRequest, refreshed_job.request_id)
+            normalized_error = normalize_error_message(str(exc))
+            refreshed_job.last_error = normalized_error
+            refreshed_job.locked_at = None
+            refreshed_job.updated_at = utcnow()
+            session.add(refreshed_job)
+            if request:
+                request.ultimo_erro = normalized_error
+                request.atualizado_em = utcnow()
+                session.add(request)
             session.commit()
             session.refresh(refreshed_job)
             return job_to_schema_payload(refreshed_job)
