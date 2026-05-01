@@ -32,6 +32,12 @@ class OpenAIAccountCreationManualReviewRequired(OpenAIAccountCreationError):
 EMAIL_REGEX = re.compile(r"^[A-Za-z0-9_.+\-]+@[A-Za-z0-9\-]+\.[A-Za-z0-9.\-]+$")
 MAX_ERROR_LENGTH = 500
 MAX_AUTH_PATH_LENGTH = 80
+ACCOUNT_CREATION_SEQUENCE_BLOCKING_STATUSES = {
+    OpenAIAccountCreationJobStatus.PENDING,
+    OpenAIAccountCreationJobStatus.RUNNING,
+    OpenAIAccountCreationJobStatus.WAITING_OTP_INPUT,
+    OpenAIAccountCreationJobStatus.RETRY_WAIT,
+}
 
 
 def utcnow() -> datetime.datetime:
@@ -128,8 +134,59 @@ def compute_account_creation_retry_cooldown_seconds(attempt_count: int) -> int:
     return cooldowns[index]
 
 
+def account_creation_sequence_retry_seconds() -> int:
+    return max(10, int(settings.OPENAI_ACCOUNT_CREATION_SEQUENCE_RETRY_SECONDS))
+
+
 def account_creation_retry_deadline(job: OpenAIAccountCreationJob) -> datetime.datetime:
     return job.created_at + datetime.timedelta(seconds=settings.OPENAI_ACCOUNT_CREATION_RETRY_WINDOW_SECONDS)
+
+
+def find_blocking_account_creation_predecessor(
+    session: Session,
+    job: OpenAIAccountCreationJob,
+) -> OpenAIAccountCreationJob | None:
+    return session.exec(
+        select(OpenAIAccountCreationJob)
+        .where(OpenAIAccountCreationJob.id != job.id)
+        .where(OpenAIAccountCreationJob.created_at < job.created_at)
+        .where(OpenAIAccountCreationJob.status.in_(ACCOUNT_CREATION_SEQUENCE_BLOCKING_STATUSES))
+        .order_by(OpenAIAccountCreationJob.created_at.asc())
+        .limit(1)
+    ).first()
+
+
+def defer_account_creation_job_until_predecessor_finishes(
+    session: Session,
+    job: OpenAIAccountCreationJob,
+    request: OpenAIAccountCreationRequest,
+    predecessor: OpenAIAccountCreationJob,
+) -> dict:
+    now = utcnow()
+    retry_seconds = account_creation_sequence_retry_seconds()
+    next_retry = now + datetime.timedelta(seconds=retry_seconds)
+    predecessor_request = session.get(OpenAIAccountCreationRequest, predecessor.request_id)
+    predecessor_email = predecessor_request.email if predecessor_request else str(predecessor.id)
+    message = normalize_error_message(
+        f"Aguardando job anterior finalizar antes de criar esta conta: {predecessor_email} ({predecessor.status.value})."
+    )
+
+    job.status = OpenAIAccountCreationJobStatus.RETRY_WAIT
+    job.last_error = message
+    job.locked_at = None
+    job.started_at = None
+    job.finished_at = None
+    job.next_retry_at = next_retry
+    session.add(job)
+
+    request.status_atual = OpenAIAccountCreationRequestStatus.RETRY_WAIT
+    request.ultimo_erro = message
+    request.atualizado_em = now
+    session.add(request)
+    session.commit()
+    session.refresh(job)
+    enqueue_openai_account_creation_job(job.id, countdown_seconds=retry_seconds)
+    return job_to_schema_payload(job)
 
 
 def validate_batch_item(email: str, senha: str) -> bool:
@@ -629,6 +686,15 @@ def process_openai_account_creation_job(job_id: uuid.UUID) -> dict:
             session.commit()
             session.refresh(job)
             return job_to_schema_payload(job)
+
+        blocking_predecessor = find_blocking_account_creation_predecessor(session, job)
+        if blocking_predecessor:
+            return defer_account_creation_job_until_predecessor_finishes(
+                session,
+                job,
+                request,
+                blocking_predecessor,
+            )
 
         now = utcnow()
         job.status = OpenAIAccountCreationJobStatus.RUNNING
