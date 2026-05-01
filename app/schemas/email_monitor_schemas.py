@@ -81,6 +81,12 @@ class EmailMonitorAccountRead(BaseModel):
     last_success_at: Optional[datetime.datetime] = None
     last_error_at: Optional[datetime.datetime] = None
     last_error_message: Optional[str] = None
+    last_outlook_otp_status: Optional[str] = None
+    last_outlook_otp_code: Optional[str] = None
+    last_outlook_otp_fetched_at: Optional[datetime.datetime] = None
+    last_outlook_otp_error_message: Optional[str] = None
+    last_outlook_otp_evidence_path: Optional[str] = None
+    outlook_otp_fetch_locked_at: Optional[datetime.datetime] = None
     consecutive_failures: int
     next_retry_at: Optional[datetime.datetime] = None
     sync_status: EmailMonitorSyncStatus
@@ -97,6 +103,12 @@ class EmailMonitorConnectionTestResult(BaseModel):
     success: bool
     message: str
     folders: list[str] = Field(default_factory=list)
+
+
+class EmailMonitorOutlookOtpFetchResponse(BaseModel):
+    message: str
+    fetch_status: str
+    account: EmailMonitorAccountRead
 
 
 class EmailMonitorRuleCreate(BaseModel):

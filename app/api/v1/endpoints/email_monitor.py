@@ -24,6 +24,7 @@ from app.schemas.email_monitor_schemas import (
     EmailMonitorAccountDetail,
     EmailMonitorAccountRead,
     EmailMonitorAccountTestRequest,
+    EmailMonitorOutlookOtpFetchResponse,
     EmailMonitorAccountUpdate,
     EmailMonitorAlertItem,
     EmailMonitorAuditLogRead,
@@ -45,9 +46,11 @@ from app.schemas.email_monitor_schemas import (
 from app.services.email_monitor_service import (
     account_to_schema_payload,
     delete_account_permanently,
+    enqueue_email_monitor_outlook_otp_fetch,
     log_audit,
     normalize_folder_list,
     normalize_rule_keywords,
+    start_email_monitor_outlook_otp_fetch,
     sync_account,
     sync_active_accounts,
     test_imap_connection,
@@ -372,6 +375,43 @@ def sync_single_account(
         finished_at=sync_run.finished_at,
         error_message=sync_run.error_message,
     )
+
+
+@router.post("/accounts/{account_id}/fetch-outlook-otp", response_model=EmailMonitorOutlookOtpFetchResponse)
+def fetch_outlook_otp_for_account(
+    *,
+    account_id: uuid.UUID,
+    request: Request,
+    session: Session = Depends(get_session),
+    current_admin: Usuario = Depends(get_current_admin_user),
+):
+    account = session.get(EmailMonitorAccount, account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Conta IMAP não encontrada.")
+
+    try:
+        start_email_monitor_outlook_otp_fetch(session, account)
+        log_audit(
+            session,
+            actor_usuario_id=current_admin.id,
+            event_type="email_monitor.account.fetch_outlook_otp_started",
+            resource_type="email_monitor_account",
+            resource_id=str(account.id),
+            message=f"Busca de OTP Outlook iniciada para '{account.display_name}'.",
+            metadata={"email": account.email},
+            ip_address=get_client_ip(request),
+        )
+        session.commit()
+        session.refresh(account)
+        enqueue_email_monitor_outlook_otp_fetch(account.id)
+        return EmailMonitorOutlookOtpFetchResponse(
+            message="Busca de OTP Outlook iniciada. Atualize a lista em instantes para ver o código.",
+            fetch_status="FETCH_STARTED",
+            account=EmailMonitorAccountRead(**account_to_schema_payload(account)),
+        )
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/sync", response_model=EmailMonitorSyncBatchResponse)

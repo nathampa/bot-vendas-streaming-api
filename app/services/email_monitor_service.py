@@ -15,6 +15,7 @@ from email.parser import BytesParser
 from email.utils import getaddresses, parsedate_to_datetime
 from fnmatch import fnmatch
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any, Iterable, Optional
 from urllib.parse import quote, urlparse
 
@@ -24,6 +25,7 @@ from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.db.database import engine
+from app.models import conta_mae_models as _conta_mae_models  # noqa: F401
 from app.models.email_monitor_models import (
     AuditLog,
     EmailMonitorAccount,
@@ -37,6 +39,10 @@ from app.models.email_monitor_models import (
     EmailMonitorSyncStatus,
     EmailMonitorWebhookStatus,
 )
+from app.models import pedido_models as _pedido_models  # noqa: F401
+from app.models import produto_models as _produto_models  # noqa: F401
+from app.models import suporte_models as _suporte_models  # noqa: F401
+from app.models.usuario_models import Usuario  # noqa: F401
 from app.services.security import decrypt_data, encrypt_data
 
 _ALLOWED_TAGS = {
@@ -75,6 +81,7 @@ _ALLOWED_ATTRS = {"href", "title", "colspan", "rowspan", "target", "rel"}
 _ALLOWED_SCHEMES = {"http", "https", "mailto"}
 _SYNC_REGISTRY_LOCK = threading.Lock()
 _SYNC_LOCKS: dict[str, threading.Lock] = {}
+MAX_OUTLOOK_OTP_ERROR_LENGTH = 500
 
 
 class SanitizedHTMLParser(HTMLParser):
@@ -363,6 +370,198 @@ def log_audit(
     )
     session.add(audit)
     return audit
+
+
+def normalize_outlook_otp_error(message: str | None) -> str | None:
+    if message is None:
+        return None
+    normalized = re.sub(r"\s+", " ", str(message)).strip()
+    if len(normalized) <= MAX_OUTLOOK_OTP_ERROR_LENGTH:
+        return normalized
+    return normalized[: MAX_OUTLOOK_OTP_ERROR_LENGTH - 3] + "..."
+
+
+def email_monitor_host_runner_root() -> Path:
+    root = Path(settings.OPENAI_INVITE_HOST_RUNNER_ROOT)
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def email_monitor_host_runner_requests_dir() -> Path:
+    path = email_monitor_host_runner_root() / "requests"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def email_monitor_host_runner_results_dir() -> Path:
+    path = email_monitor_host_runner_root() / "results"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def build_email_monitor_host_runner_request_path(request_id: uuid.UUID) -> Path:
+    return email_monitor_host_runner_requests_dir() / f"{request_id}.json"
+
+
+def build_email_monitor_host_runner_result_path(request_id: uuid.UUID) -> Path:
+    return email_monitor_host_runner_results_dir() / f"{request_id}.json"
+
+
+def write_email_monitor_host_runner_request(payload: dict) -> tuple[uuid.UUID, Path]:
+    request_id = uuid.uuid4()
+    request_path = build_email_monitor_host_runner_request_path(request_id)
+    result_path = build_email_monitor_host_runner_result_path(request_id)
+    full_payload = {
+        **payload,
+        "request_id": str(request_id),
+        "result_path": str(result_path),
+        "created_at": utcnow().isoformat(),
+    }
+    temp_path = request_path.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(full_payload, ensure_ascii=True), encoding="utf-8")
+    temp_path.chmod(0o600)
+    temp_path.replace(request_path)
+    return request_id, result_path
+
+
+def wait_email_monitor_host_runner_result(result_path: Path) -> dict:
+    deadline = time.time() + settings.OPENAI_INVITE_HOST_RUNNER_TIMEOUT_SECONDS
+    while time.time() < deadline:
+        if result_path.exists():
+            try:
+                payload = json.loads(result_path.read_text(encoding="utf-8"))
+            finally:
+                result_path.unlink(missing_ok=True)
+            return payload
+        time.sleep(0.5)
+    raise RuntimeError("O runner host-side do Outlook OTP não respondeu a tempo.")
+
+
+def execute_email_monitor_host_runner_request(payload: dict) -> dict:
+    _, result_path = write_email_monitor_host_runner_request(payload)
+    return wait_email_monitor_host_runner_result(result_path)
+
+
+def build_email_monitor_outlook_profile_path(account: EmailMonitorAccount) -> str:
+    root = Path(settings.OPENAI_ACCOUNT_CREATION_OUTLOOK_PROFILE_ROOT)
+    root.mkdir(parents=True, exist_ok=True)
+    email_part = re.sub(r"[^a-zA-Z0-9_.-]+", "_", account.email.lower()).strip("_") or str(account.id)
+    return str(root / f"email_monitor_{email_part}_{str(account.id)[:8]}")
+
+
+def build_email_monitor_outlook_evidence_dir(account: EmailMonitorAccount) -> str:
+    root = Path(settings.OPENAI_ACCOUNT_CREATION_EVIDENCE_ROOT) / "email_monitor_outlook" / str(account.id)
+    root.mkdir(parents=True, exist_ok=True)
+    return str(root)
+
+
+def build_email_monitor_outlook_fetch_request(account: EmailMonitorAccount) -> dict:
+    password = decrypt_data(account.imap_password_encrypted)
+    if not password:
+        raise RuntimeError("Nao foi possivel descriptografar a senha da conta para buscar OTP no Outlook.")
+    outlook_email = (account.email or account.imap_username or "").strip()
+    if not outlook_email:
+        raise RuntimeError("A conta nao possui email configurado para buscar OTP no Outlook.")
+    return {
+        "action": "fetch_outlook_otp",
+        "outlook_email": outlook_email,
+        "outlook_password": password,
+        "profile_dir": build_email_monitor_outlook_profile_path(account),
+        "evidence_dir": build_email_monitor_outlook_evidence_dir(account),
+    }
+
+
+def start_email_monitor_outlook_otp_fetch(session: Session, account: EmailMonitorAccount) -> EmailMonitorAccount:
+    if account.outlook_otp_fetch_locked_at is not None:
+        raise RuntimeError("Ja existe uma busca de OTP Outlook em andamento para esta conta.")
+
+    build_email_monitor_outlook_fetch_request(account)
+
+    now = utcnow()
+    account.outlook_otp_fetch_locked_at = now
+    account.last_outlook_otp_status = "FETCHING"
+    account.last_outlook_otp_code_encrypted = None
+    account.last_outlook_otp_fetched_at = None
+    account.last_outlook_otp_error_message = None
+    account.last_outlook_otp_evidence_path = None
+    session.add(account)
+    session.flush()
+    return account
+
+
+def process_email_monitor_outlook_otp_fetch_task(account_id: str) -> None:
+    try:
+        processed = process_email_monitor_outlook_otp_fetch(uuid.UUID(account_id))
+        print(
+            "BACKGROUND TASK: Fetch Outlook OTP do Email Monitor processado. "
+            f"account_id={processed['id']} status={processed['last_outlook_otp_status']}"
+        )
+    except Exception as exc:
+        print(f"ERRO CRITICO na tarefa local de fetch Outlook OTP do Email Monitor ({account_id}): {exc}")
+
+
+def enqueue_email_monitor_outlook_otp_fetch(
+    account_id: uuid.UUID,
+) -> None:
+    if settings.CELERY_BROKER_URL:
+        from app.worker.celery_app import celery_app
+
+        celery_app.send_task("process_email_monitor_outlook_otp_fetch_job", args=[str(account_id)])
+        return
+
+    threading.Thread(
+        target=process_email_monitor_outlook_otp_fetch_task,
+        args=(str(account_id),),
+        daemon=True,
+        name=f"email-monitor-outlook-otp-{account_id}",
+    ).start()
+
+
+def process_email_monitor_outlook_otp_fetch(account_id: uuid.UUID) -> dict[str, Any]:
+    with Session(engine) as session:
+        account = session.get(EmailMonitorAccount, account_id)
+        if not account:
+            raise RuntimeError(f"Conta IMAP {account_id} nao encontrada.")
+
+        try:
+            result = execute_email_monitor_host_runner_request(build_email_monitor_outlook_fetch_request(account))
+            status = (result.get("status") or "FAILED").upper()
+            message = normalize_outlook_otp_error(result.get("message"))
+            evidence_path = result.get("evidence_path")
+
+            account.outlook_otp_fetch_locked_at = None
+            account.last_outlook_otp_status = status
+            account.last_outlook_otp_evidence_path = evidence_path
+            account.last_outlook_otp_fetched_at = utcnow()
+
+            if status == "OTP_FOUND":
+                otp_code = re.sub(r"\D+", "", result.get("otp_code") or "")
+                if len(otp_code) != 6:
+                    raise RuntimeError("O Outlook retornou um OTP invalido.")
+                account.last_outlook_otp_code_encrypted = encrypt_data(otp_code)
+                account.last_outlook_otp_error_message = None
+            else:
+                account.last_outlook_otp_code_encrypted = None
+                account.last_outlook_otp_error_message = message or "Nao foi possivel localizar um OTP da OpenAI no Outlook."
+
+            session.add(account)
+            session.commit()
+            session.refresh(account)
+            return account_to_schema_payload(account)
+        except Exception as exc:
+            session.rollback()
+            account = session.get(EmailMonitorAccount, account_id)
+            if not account:
+                raise
+            account.outlook_otp_fetch_locked_at = None
+            account.last_outlook_otp_status = "FAILED"
+            account.last_outlook_otp_code_encrypted = None
+            account.last_outlook_otp_fetched_at = utcnow()
+            account.last_outlook_otp_error_message = normalize_outlook_otp_error(str(exc))
+            session.add(account)
+            session.commit()
+            session.refresh(account)
+            return account_to_schema_payload(account)
 
 
 def get_account_lock(account_id: uuid.UUID) -> threading.Lock:
@@ -951,6 +1150,7 @@ def start_scheduler(stop_event: threading.Event) -> threading.Thread:
 
 
 def account_to_schema_payload(account: EmailMonitorAccount) -> dict[str, Any]:
+    last_outlook_otp_code = decrypt_data(account.last_outlook_otp_code_encrypted) if account.last_outlook_otp_code_encrypted else None
     return {
         "id": account.id,
         "display_name": account.display_name,
@@ -967,6 +1167,12 @@ def account_to_schema_payload(account: EmailMonitorAccount) -> dict[str, Any]:
         "last_success_at": account.last_success_at,
         "last_error_at": account.last_error_at,
         "last_error_message": account.last_error_message,
+        "last_outlook_otp_status": account.last_outlook_otp_status,
+        "last_outlook_otp_code": last_outlook_otp_code,
+        "last_outlook_otp_fetched_at": account.last_outlook_otp_fetched_at,
+        "last_outlook_otp_error_message": account.last_outlook_otp_error_message,
+        "last_outlook_otp_evidence_path": account.last_outlook_otp_evidence_path,
+        "outlook_otp_fetch_locked_at": account.outlook_otp_fetch_locked_at,
         "consecutive_failures": account.consecutive_failures,
         "next_retry_at": account.next_retry_at,
         "sync_status": account.sync_status,

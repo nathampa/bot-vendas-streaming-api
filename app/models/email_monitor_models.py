@@ -65,6 +65,12 @@ class EmailMonitorAccount(SQLModel, table=True):
     last_success_at: Optional[datetime.datetime] = Field(default=None, index=True)
     last_error_at: Optional[datetime.datetime] = Field(default=None)
     last_error_message: Optional[str] = Field(default=None, max_length=500)
+    last_outlook_otp_status: Optional[str] = Field(default=None, max_length=40)
+    last_outlook_otp_code_encrypted: Optional[str] = Field(default=None)
+    last_outlook_otp_fetched_at: Optional[datetime.datetime] = Field(default=None)
+    last_outlook_otp_error_message: Optional[str] = Field(default=None, max_length=500)
+    last_outlook_otp_evidence_path: Optional[str] = Field(default=None, max_length=1000)
+    outlook_otp_fetch_locked_at: Optional[datetime.datetime] = Field(default=None)
     consecutive_failures: int = Field(default=0, nullable=False)
     next_retry_at: Optional[datetime.datetime] = Field(default=None, index=True)
     sync_status: EmailMonitorSyncStatus = Field(

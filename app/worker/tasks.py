@@ -9,6 +9,7 @@ from app.services import security # Para descriptografar a nova senha
 from app.services.notification_service import send_telegram_message, escape_markdown_v2
 from app.services.conta_mae_invite_service import process_invite_job
 from app.services.conta_mae_member_removal_service import process_member_removal_job
+from app.services.email_monitor_service import process_email_monitor_outlook_otp_fetch
 from app.services.openai_account_creation_service import (
     process_openai_account_creation_job,
     process_openai_account_creation_outlook_fetch,
@@ -296,6 +297,28 @@ def process_openai_account_creation_outlook_fetch_job_task(job_id: str):
         }
     except Exception as exc:
         print(f"ERRO CRITICO na tarefa 'process_openai_account_creation_outlook_fetch_job' ({job_id}): {exc}")
+        raise
+    finally:
+        print("=" * 50)
+
+
+@celery_app.task(name="process_email_monitor_outlook_otp_fetch_job")
+def process_email_monitor_outlook_otp_fetch_job_task(account_id: str):
+    print("=" * 50)
+    print("CELERY WORKER: Tarefa 'process_email_monitor_outlook_otp_fetch_job' INICIADA!")
+    print(f"  -> Account ID: {account_id}")
+    try:
+        processed_account = process_email_monitor_outlook_otp_fetch(uuid.UUID(account_id))
+        print(
+            "CELERY WORKER: Fetch Outlook OTP do Email Monitor concluido. "
+            f"status={processed_account['last_outlook_otp_status']} account_id={processed_account['id']}"
+        )
+        return {
+            "account_id": processed_account["id"],
+            "status": processed_account["last_outlook_otp_status"],
+        }
+    except Exception as exc:
+        print(f"ERRO CRITICO na tarefa 'process_email_monitor_outlook_otp_fetch_job' ({account_id}): {exc}")
         raise
     finally:
         print("=" * 50)
