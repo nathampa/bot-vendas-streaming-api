@@ -1659,12 +1659,29 @@ def login_outlook_web(page, email_value: str, password_value: str) -> None:
     page.goto(OUTLOOK_LOGIN_URL, wait_until="domcontentloaded")
     page.wait_for_load_state("domcontentloaded")
     page.wait_for_timeout(1500)
+    password_submit_count = 0
+    password_reprompt_count = 0
 
-    for _ in range(12):
+    for _ in range(20):
         current_body = outlook_body_text(page).lower()
         if is_outlook_mail_experience(page):
             log_host_step(email_value, "mail_experience_ready_from_login", page)
             return
+
+        if any(
+            marker in current_body
+            for marker in (
+                "your account or password is incorrect",
+                "your password is incorrect",
+                "incorrect password",
+                "that password is incorrect",
+                "try entering your microsoft account again",
+            )
+        ):
+            raise HostRunnerError("O Outlook rejeitou a senha informada para esta conta.")
+
+        if "verify your email" in current_body:
+            raise HostRunnerError("O Outlook pediu verificacao adicional do email antes de abrir a inbox.")
 
         if "manage cookie" in current_body or "cookie preferences" in current_body or "accept reject" in current_body:
             if click_outlook_text(page, ["reject", "accept"]):
@@ -1693,11 +1710,34 @@ def login_outlook_web(page, email_value: str, password_value: str) -> None:
 
         password_input = first_visible_locator(page, OUTLOOK_PASSWORD_INPUT_SELECTORS)
         if password_input:
+            password_submit_count += 1
+            if any(
+                marker in current_body
+                for marker in (
+                    "enter your password",
+                    "sign in to your microsoft account",
+                    "forgot password",
+                )
+            ):
+                password_reprompt_count += 1
             password_input.fill(password_value)
             if not click_outlook_text(page, ["sign in", "log in", "next", "entrar", "continuar"]):
                 page.keyboard.press("Enter")
             log_host_step(email_value, "submitted_password", page)
             page.wait_for_timeout(2000)
+            if password_submit_count >= 12 and password_reprompt_count >= 8:
+                followup_body = outlook_body_text(page).lower()
+                if any(
+                    marker in followup_body
+                    for marker in (
+                        "enter your password",
+                        "sign in to your microsoft account",
+                        "forgot password",
+                    )
+                ):
+                    raise HostRunnerError(
+                        "O Outlook permaneceu na tela de senha apos muitas tentativas; valide a senha Outlook desta conta."
+                    )
             continue
 
         state = detect_auth_state(page)
@@ -2148,6 +2188,25 @@ def run_fetch_outlook_otp(request: dict) -> dict:
                     "message": "Nao encontrei OTP visivel da OpenAI na inbox/junk do Outlook.",
                     "evidence_path": html_path or str(evidence_dir),
                 }
+        except Exception as exc:
+            if browser is not None:
+                try:
+                    context = browser.contexts[0]
+                    page = context.pages[0] if context.pages else None
+                except Exception:
+                    page = None
+                if page is not None:
+                    capture(page, evidence_dir, "otp_fetch_failed")
+                    html_path = write_html_snapshot(page, evidence_dir, "otp_fetch_failed")
+                else:
+                    html_path = None
+            else:
+                html_path = None
+            return {
+                "status": "FAILED",
+                "message": str(exc),
+                "evidence_path": html_path or str(evidence_dir),
+            }
         finally:
             if browser is not None:
                 browser.close()
