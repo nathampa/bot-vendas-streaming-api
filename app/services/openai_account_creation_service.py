@@ -580,6 +580,8 @@ def schedule_openai_account_creation_retry_or_manual_review(
 def start_openai_account_creation_outlook_fetch(
     session: Session,
     job: OpenAIAccountCreationJob,
+    *,
+    start_message: str = "Busca de OTP Outlook iniciada pelo painel.",
 ) -> OpenAIAccountCreationJob:
     if job.status not in {
         OpenAIAccountCreationJobStatus.WAITING_OTP_INPUT,
@@ -599,7 +601,7 @@ def start_openai_account_creation_outlook_fetch(
 
     now = utcnow()
     job.locked_at = now
-    job.last_error = "Busca de OTP Outlook iniciada pelo painel."
+    job.last_error = normalize_error_message(start_message)
     job.updated_at = now
     session.add(job)
     request.ultimo_erro = job.last_error
@@ -668,6 +670,32 @@ def process_openai_account_creation_job(job_id: uuid.UUID) -> dict:
                 session.add(refreshed_request)
                 session.commit()
                 session.refresh(refreshed_job)
+                try:
+                    start_openai_account_creation_outlook_fetch(
+                        session,
+                        refreshed_job,
+                        start_message="Busca de OTP Outlook iniciada automaticamente pelo fluxo de criacao.",
+                    )
+                    session.commit()
+                    session.refresh(refreshed_job)
+                    enqueue_openai_account_creation_outlook_fetch_job(refreshed_job.id)
+                except Exception as exc:
+                    session.rollback()
+                    refreshed_job = session.get(OpenAIAccountCreationJob, job_id)
+                    refreshed_request = session.get(OpenAIAccountCreationRequest, request.id)
+                    if refreshed_job and refreshed_request:
+                        fallback_message = normalize_error_message(
+                            f"Aguardando OTP manual. Busca automatica Outlook nao iniciada: {exc}"
+                        )
+                        refreshed_job.last_error = fallback_message or refreshed_job.last_error
+                        refreshed_job.locked_at = None
+                        refreshed_job.updated_at = utcnow()
+                        session.add(refreshed_job)
+                        refreshed_request.ultimo_erro = refreshed_job.last_error
+                        refreshed_request.atualizado_em = utcnow()
+                        session.add(refreshed_request)
+                        session.commit()
+                        session.refresh(refreshed_job)
                 return job_to_schema_payload(refreshed_job)
 
             if result_status == "CREATED":
