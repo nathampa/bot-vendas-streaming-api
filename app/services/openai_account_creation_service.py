@@ -393,8 +393,13 @@ def fetch_outlook_otp_for_job(
     *,
     background_tasks: Optional[BackgroundTasks] = None,
 ) -> tuple[str, str, OpenAIAccountCreationJob]:
-    if job.status != OpenAIAccountCreationJobStatus.WAITING_OTP_INPUT:
-        raise OpenAIAccountCreationManualReviewRequired("Este job nao esta aguardando OTP manual.")
+    if job.status not in {
+        OpenAIAccountCreationJobStatus.WAITING_OTP_INPUT,
+        OpenAIAccountCreationJobStatus.CREATED,
+    }:
+        raise OpenAIAccountCreationManualReviewRequired(
+            "Este job nao permite busca de OTP Outlook neste estado."
+        )
 
     request = session.get(OpenAIAccountCreationRequest, job.request_id)
     if not request:
@@ -416,13 +421,25 @@ def fetch_outlook_otp_for_job(
             raise OpenAIAccountCreationManualReviewRequired(
                 "O fetch do Outlook retornou um OTP invalido."
             )
-        submit_openai_account_creation_otp(session, refreshed_job, otp_code)
-        refreshed_job.evidence_path = result.get("evidence_path") or refreshed_job.evidence_path
+        if refreshed_job.status == OpenAIAccountCreationJobStatus.WAITING_OTP_INPUT:
+            submit_openai_account_creation_otp(session, refreshed_job, otp_code)
+            refreshed_job.evidence_path = result.get("evidence_path") or refreshed_job.evidence_path
+            session.add(refreshed_job)
+            session.commit()
+            session.refresh(refreshed_job)
+            enqueue_openai_account_creation_job(refreshed_job.id, background_tasks=background_tasks)
+            return "OTP encontrado no Outlook e job reenfileirado.", result_status, refreshed_job
+
+        refreshed_job.last_error = f"OTP Outlook encontrado: {otp_code}"
+        refreshed_job.locked_at = None
+        refreshed_job.updated_at = utcnow()
         session.add(refreshed_job)
+        refreshed_request.ultimo_erro = refreshed_job.last_error
+        refreshed_request.atualizado_em = utcnow()
+        session.add(refreshed_request)
         session.commit()
         session.refresh(refreshed_job)
-        enqueue_openai_account_creation_job(refreshed_job.id, background_tasks=background_tasks)
-        return "OTP encontrado no Outlook e job reenfileirado.", result_status, refreshed_job
+        return "OTP encontrado no Outlook para login manual.", result_status, refreshed_job
 
     refreshed_job.last_error = result_message or (
         "Nao foi possivel localizar um OTP visivel da OpenAI no Outlook."
@@ -564,8 +581,13 @@ def start_openai_account_creation_outlook_fetch(
     session: Session,
     job: OpenAIAccountCreationJob,
 ) -> OpenAIAccountCreationJob:
-    if job.status != OpenAIAccountCreationJobStatus.WAITING_OTP_INPUT:
-        raise OpenAIAccountCreationManualReviewRequired("Este job nao esta aguardando OTP manual.")
+    if job.status not in {
+        OpenAIAccountCreationJobStatus.WAITING_OTP_INPUT,
+        OpenAIAccountCreationJobStatus.CREATED,
+    }:
+        raise OpenAIAccountCreationManualReviewRequired(
+            "Este job nao permite busca de OTP Outlook neste estado."
+        )
     if job.locked_at is not None:
         raise OpenAIAccountCreationManualReviewRequired("Ja existe uma busca de OTP Outlook em andamento para este job.")
 
@@ -723,7 +745,10 @@ def process_openai_account_creation_outlook_fetch(job_id: uuid.UUID) -> dict:
         job = session.get(OpenAIAccountCreationJob, job_id)
         if not job:
             raise OpenAIAccountCreationError(f"Job {job_id} nao encontrado.")
-        if job.status != OpenAIAccountCreationJobStatus.WAITING_OTP_INPUT:
+        if job.status not in {
+            OpenAIAccountCreationJobStatus.WAITING_OTP_INPUT,
+            OpenAIAccountCreationJobStatus.CREATED,
+        }:
             return job_to_schema_payload(job)
 
         try:
