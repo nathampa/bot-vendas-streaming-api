@@ -722,12 +722,22 @@ def process_openai_account_creation_job(job_id: uuid.UUID) -> dict:
 
             result_status = (result.get("status") or "").upper()
             result_message = normalize_error_message(result.get("message"))
+            result_auth_path = normalize_auth_path(result.get("auth_path_used"))
 
             if result_status == "WAITING_OTP_INPUT":
+                otp_was_attempted = bool(refreshed_job.otp_code_encrypted) and "otp" in (
+                    (result.get("auth_path_used") or "").lower()
+                )
                 refreshed_job.status = OpenAIAccountCreationJobStatus.WAITING_OTP_INPUT
+                if otp_was_attempted:
+                    refreshed_job.otp_code_encrypted = None
+                    refreshed_job.otp_submitted_at = None
+                    result_message = normalize_error_message(
+                        "OTP informado foi rejeitado pela OpenAI. Codigo antigo descartado; iniciando nova busca Outlook."
+                    )
                 refreshed_job.last_error = result_message
                 refreshed_job.evidence_path = result.get("evidence_path") or str(build_request_evidence_dir(refreshed_job))
-                refreshed_job.auth_path_used = normalize_auth_path(result.get("auth_path_used"))
+                refreshed_job.auth_path_used = result_auth_path
                 refreshed_job.locked_at = None
                 refreshed_job.finished_at = utcnow()
                 session.add(refreshed_job)

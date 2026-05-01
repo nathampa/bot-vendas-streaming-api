@@ -2044,6 +2044,20 @@ def submit_default_continue(page) -> None:
         page.keyboard.press("Enter")
 
 
+def request_new_otp_code(page) -> bool:
+    return click_first_button_or_link(
+        page,
+        [
+            r"resend email",
+            r"resend code",
+            r"send new code",
+            r"reenviar",
+            r"reenviar codigo",
+            r"reenviar código",
+        ],
+    )
+
+
 def run_create_account(request: dict) -> dict:
     evidence_dir = Path(request["evidence_dir"])
     evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -2122,6 +2136,11 @@ def run_create_account(request: dict) -> dict:
                         continue
                     if state == "otp_required":
                         if otp_code and "otp" in auth_path:
+                            if request_new_otp_code(page):
+                                auth_path.append("otp_rejected_resend")
+                                page.wait_for_timeout(2000)
+                            else:
+                                auth_path.append("otp_rejected")
                             otp_code = None
                         if not otp_code:
                             capture(page, evidence_dir, "account_creation_waiting_otp")
