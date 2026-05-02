@@ -30,6 +30,13 @@ from playwright.sync_api import sync_playwright
 
 OTP_REGEX = re.compile(r"(?<!\d)(\d{6})(?!\d)")
 OUTLOOK_ROW_TIME_REGEX = re.compile(r"\b(\d{1,2}):(\d{2})\s*([ap]\.?m\.?)?\b", re.IGNORECASE)
+OUTLOOK_WEEKDAY_REGEX = re.compile(r"\b(mon|tue|wed|thu|fri|sat|sun)\b", re.IGNORECASE)
+OUTLOOK_MONTH_REGEX = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\b", re.IGNORECASE)
+OUTLOOK_FOLDER_LABELS = {
+    "inbox": ["inbox", "caixa de entrada"],
+    "junk": ["junk email", "spam", "junk", "lixo eletrônico", "lixo eletronico"],
+    "other": ["other", "outros"],
+}
 OPENAI_SENDER_HINTS = ("openai", "chatgpt")
 OPENAI_SUBJECT_HINTS = ("code", "verification", "login", "security")
 EMAIL_INPUT_SELECTORS = [
@@ -1867,7 +1874,8 @@ def choose_best_openai_otp(text: str) -> str | None:
 
 def outlook_row_time_score(aria_label: str) -> int | None:
     best_score: int | None = None
-    for match in OUTLOOK_ROW_TIME_REGEX.finditer(aria_label or ""):
+    label = aria_label or ""
+    for match in OUTLOOK_ROW_TIME_REGEX.finditer(label):
         hour = int(match.group(1))
         minute = int(match.group(2))
         period = (match.group(3) or "").lower().replace(".", "")
@@ -1880,10 +1888,24 @@ def outlook_row_time_score(aria_label: str) -> int | None:
         score = hour * 60 + minute
         if best_score is None or score > best_score:
             best_score = score
+    if best_score is None:
+        return None
+
+    lowered_label = label.lower()
+    if "yesterday" in lowered_label or "ontem" in lowered_label:
+        best_score -= 24 * 60
+    elif OUTLOOK_MONTH_REGEX.search(lowered_label):
+        best_score -= 30 * 24 * 60
+    else:
+        weekday_match = OUTLOOK_WEEKDAY_REGEX.search(lowered_label)
+        if weekday_match:
+            current_weekday = utcnow().strftime("%a").lower()[:3]
+            if weekday_match.group(1).lower()[:3] != current_weekday:
+                best_score -= 24 * 60
     return best_score
 
 
-def outlook_message_row_candidates(page) -> list[tuple[int, int, str]]:
+def outlook_message_row_candidates(page) -> list[tuple[int, int, str, str | None]]:
     if not is_outlook_mail_experience(page):
         return []
     try:
@@ -1892,7 +1914,7 @@ def outlook_message_row_candidates(page) -> list[tuple[int, int, str]]:
     except Exception:
         return []
 
-    candidates: list[tuple[int, int, str]] = []
+    candidates: list[tuple[int, int, str, str | None]] = []
     for index in range(count):
         try:
             row = rows.nth(index)
@@ -1900,7 +1922,12 @@ def outlook_message_row_candidates(page) -> list[tuple[int, int, str]]:
             if not any(marker in aria_label for marker in ("openai", "chatgpt", "verification code", "temporary verification code", "login code")):
                 continue
             time_score = outlook_row_time_score(aria_label)
-            candidates.append((time_score if time_score is not None else -index, index, aria_label))
+            candidates.append((
+                time_score if time_score is not None else -index,
+                index,
+                aria_label,
+                choose_best_openai_otp(aria_label),
+            ))
         except Exception:
             continue
     return sorted(candidates, key=lambda item: (item[0], -item[1]), reverse=True)
@@ -1909,7 +1936,7 @@ def outlook_message_row_candidates(page) -> list[tuple[int, int, str]]:
 def open_visible_outlook_message_row(page) -> bool:
     if not is_outlook_mail_experience(page):
         return False
-    for _, index, _ in outlook_message_row_candidates(page):
+    for _, index, _, _ in outlook_message_row_candidates(page):
         try:
             rows = page.locator('[role="option"][data-focusable-row="true"]')
             row = rows.nth(index)
@@ -1923,7 +1950,14 @@ def open_visible_outlook_message_row(page) -> bool:
 
 def find_openai_otp_in_current_outlook_folder(page, folder_name: str) -> dict | None:
     candidates = outlook_message_row_candidates(page)
-    for time_score, index, aria_label in candidates[:5]:
+    for time_score, index, aria_label, row_otp_code in candidates[:5]:
+        if row_otp_code:
+            return {
+                "otp_code": row_otp_code,
+                "folder": folder_name,
+                "time_score": time_score,
+                "aria_label": aria_label,
+            }
         try:
             row = page.locator('[role="option"][data-focusable-row="true"]').nth(index)
             row.click()
@@ -1953,18 +1987,13 @@ def find_openai_otp_in_current_outlook_folder(page, folder_name: str) -> dict | 
 
 def find_latest_outlook_openai_otp(page) -> dict | None:
     results: list[dict] = []
+    ensure_outlook_folder(page, "inbox", OUTLOOK_FOLDER_LABELS["inbox"])
     inbox_result = find_openai_otp_in_current_outlook_folder(page, "inbox")
     if inbox_result:
         results.append(inbox_result)
 
-    for folder_name, folder_labels in (
-        ("junk", ["junk email", "spam", "junk"]),
-        ("other", ["other"]),
-    ):
-        switched = maybe_switch_outlook_folder(page, folder_labels)
-        if not switched and folder_name == "junk":
-            switched = goto_outlook_folder_url(page, folder_name)
-        if switched:
+    for folder_name in ("junk", "other"):
+        if ensure_outlook_folder(page, folder_name, OUTLOOK_FOLDER_LABELS[folder_name]):
             folder_result = find_openai_otp_in_current_outlook_folder(page, folder_name)
             if folder_result:
                 results.append(folder_result)
@@ -1972,6 +2001,53 @@ def find_latest_outlook_openai_otp(page) -> dict | None:
     if not results:
         return None
     return max(results, key=lambda item: (item["time_score"] if item["time_score"] is not None else -1))
+
+
+def current_outlook_folder_heading(page) -> str:
+    selectors = [
+        '[role="heading"] [aria-label]',
+        '[aria-level="2"] [aria-label]',
+        '[data-app-section="MessageList"] [aria-label]',
+    ]
+    for selector in selectors:
+        try:
+            locators = page.locator(selector)
+            count = min(locators.count(), 20)
+            for index in range(count):
+                locator = locators.nth(index)
+                if not locator.is_visible():
+                    continue
+                label = (locator.get_attribute("aria-label") or locator.inner_text(timeout=500) or "").strip().lower()
+                if label in {"inbox", "junk email", "junk", "spam", "other"}:
+                    return label
+        except Exception:
+            continue
+    return ""
+
+
+def ensure_outlook_folder(page, folder_name: str, folder_labels: list[str]) -> bool:
+    expected = {
+        "inbox": {"inbox"},
+        "junk": {"junk email", "junk", "spam"},
+        "other": {"other"},
+    }.get(folder_name, {folder_name})
+
+    for attempt in range(4):
+        current_folder = current_outlook_folder_heading(page)
+        if current_folder in expected:
+            return True
+        if attempt == 0 and maybe_switch_outlook_folder(page, folder_labels):
+            page.wait_for_timeout(1800)
+            continue
+        if attempt == 1 and goto_outlook_folder_url(page, folder_name):
+            page.wait_for_timeout(1800)
+            continue
+        if attempt == 2 and maybe_switch_outlook_folder(page, folder_labels):
+            page.wait_for_timeout(1800)
+            continue
+        page.wait_for_timeout(1000)
+
+    return current_outlook_folder_heading(page) in expected
 
 
 def open_first_matching_outlook_message(page) -> bool:
@@ -2341,11 +2417,13 @@ def run_fetch_outlook_otp(request: dict) -> dict:
                 page = context.pages[0] if context.pages else context.new_page()
                 login_outlook_web(page, request["outlook_email"], request["outlook_password"])
                 ensure_outlook_inbox_ready(page)
+                ensure_outlook_folder(page, "inbox", OUTLOOK_FOLDER_LABELS["inbox"])
                 log_host_step(subject, "searching_for_openai_mail", page)
 
                 otp_result = find_latest_outlook_openai_otp(page)
                 if otp_result:
                     artifact_name = "otp_found" if otp_result["folder"] == "inbox" else "otp_found_alt_folder"
+                    ensure_outlook_folder(page, otp_result["folder"], OUTLOOK_FOLDER_LABELS.get(otp_result["folder"], []))
                     capture(page, evidence_dir, artifact_name)
                     html_path = write_html_snapshot(page, evidence_dir, artifact_name)
                     return {
