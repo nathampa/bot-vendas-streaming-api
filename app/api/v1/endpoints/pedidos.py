@@ -25,6 +25,7 @@ from app.services.disponibilidade_service import (
     inativar_conta_estoque_se_lotada,
     inativar_produto_sem_contas_disponiveis,
 )
+from app.services.pedido_expiracao_service import resolver_data_expiracao_pedido
 
 # Roteador de Admin para Pedidos
 router = APIRouter(dependencies=[Depends(get_current_admin_user)])
@@ -39,24 +40,50 @@ def get_admin_pedidos(
     """
     stmt = (
         select(
-            Pedido.id,
-            Pedido.criado_em,
-            Pedido.valor_pago,
-            Pedido.email_cliente,
-            Pedido.status_entrega,
+            Pedido,
             Produto.nome.label("produto_nome"),
             Usuario.nome_completo.label("usuario_nome_completo"),
-            Usuario.telegram_id.label("usuario_telegram_id")
+            Usuario.telegram_id.label("usuario_telegram_id"),
+            EstoqueConta.instrucoes_especificas,
         )
         .join(Produto, Pedido.produto_id == Produto.id)
         .join(Usuario, Pedido.usuario_id == Usuario.id)
+        .join(EstoqueConta, Pedido.estoque_conta_id == EstoqueConta.id, isouter=True)
         .order_by(Pedido.criado_em.desc())
     )
-    
+
+    today = datetime.date.today()
     resultados = session.exec(stmt).all()
-    # Pydantic/FastAPI fará o mapeamento automático para PedidoAdminList
-    # (Pois já atualizamos o schema PedidoAdminList no Passo 2)
-    return resultados
+    pedidos: list[PedidoAdminList] = []
+
+    for pedido, produto_nome, usuario_nome, usuario_tid, instrucoes_especificas in resultados:
+        data_expiracao, origem_expiracao = resolver_data_expiracao_pedido(
+            session=session,
+            pedido_id=pedido.id,
+            email_cliente=pedido.email_cliente,
+            estoque_conta_id=pedido.estoque_conta_id,
+            conta_mae_id=pedido.conta_mae_id,
+        )
+        dias_restantes = (data_expiracao - today).days if data_expiracao else None
+
+        pedidos.append(
+            PedidoAdminList(
+                id=pedido.id,
+                criado_em=pedido.criado_em,
+                valor_pago=pedido.valor_pago,
+                email_cliente=pedido.email_cliente,
+                status_entrega=pedido.status_entrega,
+                produto_nome=produto_nome,
+                usuario_nome_completo=usuario_nome,
+                usuario_telegram_id=usuario_tid,
+                entrega_info=instrucoes_especificas or pedido.email_cliente,
+                data_expiracao=data_expiracao,
+                dias_restantes=dias_restantes,
+                origem_expiracao=origem_expiracao,
+            )
+        )
+
+    return pedidos
 
 
 @router.get("/{pedido_id}/detalhes", response_model=PedidoAdminDetails)
@@ -79,6 +106,8 @@ def get_pedido_detalhes(
             Usuario.telegram_id.label("usuario_telegram_id"),
             EstoqueConta.login,
             EstoqueConta.senha,  # Senha CRIPTOGRAFADA
+            EstoqueConta.data_expiracao,
+            EstoqueConta.instrucoes_especificas,
             ContaMae.id,
             ContaMae.login,
             ContaMae.data_expiracao,
@@ -99,8 +128,19 @@ def get_pedido_detalhes(
     (
         pedido, produto_nome, usuario_nome, 
         usuario_tid, conta_login, conta_senha_cripto,
+        conta_expiracao, conta_instrucoes,
         conta_mae_id, conta_mae_login, conta_mae_expiracao,
     ) = resultado
+
+    today = datetime.date.today()
+    data_expiracao, origem_expiracao = resolver_data_expiracao_pedido(
+        session=session,
+        pedido_id=pedido.id,
+        email_cliente=pedido.email_cliente,
+        estoque_conta_id=pedido.estoque_conta_id,
+        conta_mae_id=pedido.conta_mae_id,
+    )
+    dias_restantes = (data_expiracao - today).days if data_expiracao else None
     
     
     # 3. Monta a conta (se ela existir)
@@ -112,7 +152,10 @@ def get_pedido_detalhes(
         
         conta_info = PedidoAdminConta(
             login=conta_login,
-            senha=senha_descriptografada
+            senha=senha_descriptografada,
+            data_expiracao=conta_expiracao,
+            dias_restantes=(conta_expiracao - today).days if conta_expiracao else None,
+            instrucoes_especificas=conta_instrucoes,
         )
 
     conta_mae_info = None
@@ -139,6 +182,10 @@ def get_pedido_detalhes(
         produto_nome=produto_nome,
         usuario_nome_completo=usuario_nome,
         usuario_telegram_id=usuario_tid,
+        entrega_info=conta_instrucoes or pedido.email_cliente,
+        data_expiracao=data_expiracao,
+        dias_restantes=dias_restantes,
+        origem_expiracao=origem_expiracao,
         conta=conta_info, # Aninha os detalhes da conta (pode ser None)
         conta_mae=conta_mae_info,
     )

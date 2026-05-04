@@ -11,6 +11,9 @@ from app.models.base import StatusEntregaPedido
 class PedidoAdminConta(SQLModel):
     login: str
     senha: str # A API vai preencher isso com a senha descriptografada
+    data_expiracao: Optional[datetime.date] = None
+    dias_restantes: Optional[int] = None
+    instrucoes_especificas: Optional[str] = None
 
 class PedidoAdminContaMae(SQLModel):
     id: uuid.UUID
@@ -39,6 +42,10 @@ class PedidoAdminList(SQLModel):
     usuario_nome_completo: str
     usuario_telegram_id: int
     email_cliente: Optional[str] = None
+    entrega_info: Optional[str] = None
+    data_expiracao: Optional[datetime.date] = None
+    dias_restantes: Optional[int] = None
+    origem_expiracao: Optional[str] = None
 
 # -----------------------------------------------------------------
 # Schema para os DETALHES de um pedido (o que aparece no modal)

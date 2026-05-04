@@ -35,3 +35,42 @@ class DashboardRecentPedido(SQLModel):
     criado_em: datetime.datetime
     usuario_telegram_id: int
     nome_completo: str
+
+
+class DashboardOperationalHealth(SQLModel):
+    produtos_ativos: int
+    produtos_inativos: int
+    estoque_ativo: int
+    estoque_inativo: int
+    estoque_requer_atencao: int
+    estoque_slots_livres: int
+    estoque_slots_ocupados: int
+    contas_mae_ativas: int
+    contas_mae_inativas: int
+    contas_mae_slots_livres: int
+    contas_mae_slots_ocupados: int
+    pedidos_pendentes: int
+    pedidos_com_ticket_aberto: int
+
+
+class DashboardExpiringPedido(SQLModel):
+    pedido_id: uuid.UUID
+    produto_nome: str
+    usuario_nome_completo: str
+    usuario_telegram_id: int
+    email_cliente: str | None = None
+    entrega_info: str | None = None
+    data_expiracao: datetime.date
+    dias_restantes: int
+    origem_expiracao: str | None = None
+
+
+class DashboardAnalitico(SQLModel):
+    vencendo_hoje: int
+    vencendo_7d: int
+    expirados: int
+    pedidos_pendentes: int
+    pedidos_com_ticket_aberto: int
+    health: DashboardOperationalHealth
+    proximos_vencimentos: list[DashboardExpiringPedido]
+    expirados_recentes: list[DashboardExpiringPedido]
