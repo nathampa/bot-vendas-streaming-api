@@ -631,6 +631,127 @@ def sorted_rules(rules: list[EmailMonitorRule], account_id: uuid.UUID) -> list[E
     )
 
 
+def match_rules_for_message(
+    rules: list[EmailMonitorRule],
+    *,
+    account_id: uuid.UUID,
+    folder_name: str,
+    sender_name: Optional[str],
+    sender_email: Optional[str],
+    subject: Optional[str],
+    body_text: Optional[str],
+    body_html_sanitized: Optional[str] = None,
+) -> list[tuple[EmailMonitorRule, str]]:
+    matching_rules: list[tuple[EmailMonitorRule, str]] = []
+    sender_blob = " ".join(filter(None, [sender_name, sender_email]))
+    searchable_body = body_text or strip_html_tags(body_html_sanitized or "")
+    for rule in sorted_rules(rules, account_id):
+        reason = rule_matches_message(
+            rule,
+            folder_name=folder_name,
+            sender=sender_blob,
+            subject=subject,
+            body_text=searchable_body,
+        )
+        if reason:
+            matching_rules.append((rule, reason))
+    return matching_rules
+
+
+def load_active_rules_for_account(session: Session, account_id: uuid.UUID) -> list[EmailMonitorRule]:
+    return session.exec(
+        select(EmailMonitorRule).where(
+            EmailMonitorRule.enabled == True,
+            or_(EmailMonitorRule.account_id == None, EmailMonitorRule.account_id == account_id),
+        )
+    ).all()
+
+
+def replace_message_matches(
+    session: Session,
+    message: EmailMonitorMessage,
+    matching_rules: list[tuple[EmailMonitorRule, str]],
+) -> bool:
+    previous_state = (
+        message.matched_rule_id,
+        message.is_relevant,
+        message.category,
+        message.matched_rule_name,
+        message.is_highlighted,
+    )
+
+    existing_matches = session.exec(
+        select(EmailMonitorMessageMatch).where(EmailMonitorMessageMatch.message_id == message.id)
+    ).all()
+    previous_match_rule_ids = [match.rule_id for match in existing_matches]
+    for match in existing_matches:
+        session.delete(match)
+
+    primary_rule = matching_rules[0][0] if matching_rules else None
+    now = utcnow()
+    message.matched_rule_id = primary_rule.id if primary_rule else None
+    message.is_relevant = primary_rule.mark_relevant if primary_rule else False
+    message.category = primary_rule.category if primary_rule and primary_rule.category else None
+    message.matched_rule_name = primary_rule.name if primary_rule else None
+    message.matched_at = now if primary_rule else None
+    message.is_highlighted = primary_rule.highlight if primary_rule else False
+    message.updated_at = now
+    session.add(message)
+    session.flush()
+
+    for rule, reason in matching_rules:
+        session.add(
+            EmailMonitorMessageMatch(
+                message_id=message.id,
+                rule_id=rule.id,
+                matched_at=now,
+                reason_summary=truncate_text(reason, 255) or rule.name,
+            )
+        )
+
+    current_state = (
+        message.matched_rule_id,
+        message.is_relevant,
+        message.category,
+        message.matched_rule_name,
+        message.is_highlighted,
+    )
+    current_match_rule_ids = [rule.id for rule, _ in matching_rules]
+    return previous_state != current_state or previous_match_rule_ids != current_match_rule_ids
+
+
+def reclassify_messages_for_accounts(session: Session, account_ids: Optional[set[uuid.UUID]] = None) -> dict[str, int]:
+    account_stmt = select(EmailMonitorAccount)
+    if account_ids is not None:
+        if not account_ids:
+            return {"accounts": 0, "messages": 0, "changed": 0, "relevant": 0}
+        account_stmt = account_stmt.where(EmailMonitorAccount.id.in_(account_ids))
+
+    accounts = session.exec(account_stmt).all()
+    totals = {"accounts": len(accounts), "messages": 0, "changed": 0, "relevant": 0}
+    for account in accounts:
+        rules = load_active_rules_for_account(session, account.id)
+        messages = session.exec(select(EmailMonitorMessage).where(EmailMonitorMessage.account_id == account.id)).all()
+        for message in messages:
+            matching_rules = match_rules_for_message(
+                rules,
+                account_id=account.id,
+                folder_name=message.folder_name,
+                sender_name=message.sender_name,
+                sender_email=message.sender_email,
+                subject=message.subject,
+                body_text=message.body_text,
+                body_html_sanitized=message.body_html_sanitized,
+            )
+            changed = replace_message_matches(session, message, matching_rules)
+            totals["messages"] += 1
+            if changed:
+                totals["changed"] += 1
+            if message.is_relevant:
+                totals["relevant"] += 1
+    return totals
+
+
 def select_incremental_uids(all_uids: list[int], last_seen_uid: Optional[int], batch_size: int) -> list[int]:
     candidates = [uid for uid in all_uids if last_seen_uid is None or uid > last_seen_uid]
     return candidates[-batch_size:] if batch_size > 0 else candidates
@@ -839,18 +960,16 @@ def upsert_message(
     if duplicate is not None:
         return None, False, duplicate.is_relevant
 
-    matching_rules: list[tuple[EmailMonitorRule, str]] = []
-    sender_blob = " ".join(filter(None, [sender_name, sender_email]))
-    for rule in sorted_rules(rules, account.id):
-        reason = rule_matches_message(
-            rule,
-            folder_name=folder_name,
-            sender=sender_blob,
-            subject=subject,
-            body_text=body_text,
-        )
-        if reason:
-            matching_rules.append((rule, reason))
+    matching_rules = match_rules_for_message(
+        rules,
+        account_id=account.id,
+        folder_name=folder_name,
+        sender_name=sender_name,
+        sender_email=sender_email,
+        subject=subject,
+        body_text=body_text,
+        body_html_sanitized=body_html_sanitized,
+    )
 
     primary_rule = matching_rules[0][0] if matching_rules else None
     now = utcnow()
@@ -940,12 +1059,7 @@ def sync_account(session: Session, account: EmailMonitorAccount, *, trigger_sour
         connection = build_connection(account.imap_host, account.imap_port, account.use_ssl)
         connection.login(account.imap_username, password)
 
-        rules = session.exec(
-            select(EmailMonitorRule).where(
-                EmailMonitorRule.enabled == True,
-                or_(EmailMonitorRule.account_id == None, EmailMonitorRule.account_id == account.id),
-            )
-        ).all()
+        rules = load_active_rules_for_account(session, account.id)
 
         total_scanned = 0
         total_saved = 0

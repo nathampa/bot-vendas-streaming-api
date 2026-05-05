@@ -4,6 +4,7 @@ from app.models.email_monitor_models import EmailMonitorRule
 from app.services.email_monitor_service import (
     build_message_hash,
     describe_imap_error,
+    match_rules_for_message,
     normalize_folder_list,
     rule_matches_message,
     select_incremental_uids,
@@ -32,6 +33,28 @@ class EmailMonitorServiceTestCase(unittest.TestCase):
         self.assertIn('remetente', reason or '')
         self.assertIn('assunto', reason or '')
         self.assertIn('palavras-chave', reason or '')
+
+    def test_match_rules_for_message_uses_html_body_fallback(self):
+        rule = EmailMonitorRule(
+            name='ChatGPT OTP',
+            subject_pattern='ChatGPT',
+            body_keywords_json=['verificação', 'temporário'],
+            priority=100,
+        )
+
+        matches = match_rules_for_message(
+            [rule],
+            account_id=rule.id,
+            folder_name='INBOX',
+            sender_name='OpenAI',
+            sender_email='noreply@tm.openai.com',
+            subject='Seu código de verificação temporário do ChatGPT',
+            body_text=None,
+            body_html_sanitized='<p>Informe este código de verificação temporário para continuar.</p>',
+        )
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0][0].name, 'ChatGPT OTP')
 
     def test_incremental_uid_selection_respects_last_seen_and_batch_limit(self):
         all_uids = [10, 11, 12, 13, 14, 15]

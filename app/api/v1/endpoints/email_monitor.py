@@ -50,6 +50,7 @@ from app.services.email_monitor_service import (
     log_audit,
     normalize_folder_list,
     normalize_rule_keywords,
+    reclassify_messages_for_accounts,
     start_email_monitor_outlook_otp_fetch,
     sync_account,
     sync_active_accounts,
@@ -508,6 +509,11 @@ def create_rule(
         webhook_url=payload.webhook_url.strip() if payload.webhook_url else None,
     )
     session.add(rule)
+    session.flush()
+    reclassification = reclassify_messages_for_accounts(
+        session,
+        None if rule.account_id is None else {rule.account_id},
+    )
     log_audit(
         session,
         actor_usuario_id=current_admin.id,
@@ -515,7 +521,11 @@ def create_rule(
         resource_type="email_monitor_rule",
         resource_id=str(rule.id),
         message=f"Regra '{rule.name}' criada.",
-        metadata={"account_id": str(rule.account_id) if rule.account_id else None, "priority": rule.priority},
+        metadata={
+            "account_id": str(rule.account_id) if rule.account_id else None,
+            "priority": rule.priority,
+            "reclassification": reclassification,
+        },
         ip_address=get_client_ip(request),
     )
     session.commit()
@@ -556,6 +566,7 @@ def update_rule(
     if payload.account_id and not session.get(EmailMonitorAccount, payload.account_id):
         raise HTTPException(status_code=404, detail="Conta IMAP vinculada à regra não encontrada.")
 
+    previous_account_id = rule.account_id
     update_data = payload.model_dump(exclude_unset=True)
     for field_name, value in update_data.items():
         if field_name == "body_keywords":
@@ -567,6 +578,13 @@ def update_rule(
         else:
             setattr(rule, field_name, value)
     session.add(rule)
+    session.flush()
+    reclassification_scope = (
+        None
+        if previous_account_id is None or rule.account_id is None
+        else {account_id for account_id in {previous_account_id, rule.account_id} if account_id is not None}
+    )
+    reclassification = reclassify_messages_for_accounts(session, reclassification_scope)
     log_audit(
         session,
         actor_usuario_id=current_admin.id,
@@ -574,7 +592,11 @@ def update_rule(
         resource_type="email_monitor_rule",
         resource_id=str(rule.id),
         message=f"Regra '{rule.name}' atualizada.",
-        metadata={"account_id": str(rule.account_id) if rule.account_id else None, "priority": rule.priority},
+        metadata={
+            "account_id": str(rule.account_id) if rule.account_id else None,
+            "priority": rule.priority,
+            "reclassification": reclassification,
+        },
         ip_address=get_client_ip(request),
     )
     session.commit()
