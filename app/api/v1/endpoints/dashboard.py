@@ -399,8 +399,8 @@ def get_dashboard_analitico(
         janela_dias = 90
     if limite < 1:
         limite = 1
-    if limite > 100:
-        limite = 100
+    if limite > 500:
+        limite = 500
 
     today = datetime.date.today()
 
@@ -440,11 +440,14 @@ def get_dashboard_analitico(
             Produto.nome.label("produto_nome"),
             Usuario.nome_completo.label("usuario_nome_completo"),
             Usuario.telegram_id.label("usuario_telegram_id"),
+            EstoqueConta.login.label("estoque_login"),
             EstoqueConta.instrucoes_especificas,
+            ContaMae.login.label("conta_mae_login"),
         )
         .join(Produto, Pedido.produto_id == Produto.id)
         .join(Usuario, Pedido.usuario_id == Usuario.id)
         .join(EstoqueConta, Pedido.estoque_conta_id == EstoqueConta.id, isouter=True)
+        .join(ContaMae, Pedido.conta_mae_id == ContaMae.id, isouter=True)
         .where(Pedido.status_entrega == StatusEntregaPedido.ENTREGUE)
         .order_by(Pedido.criado_em.desc())
     )
@@ -455,7 +458,7 @@ def get_dashboard_analitico(
     proximos_vencimentos: list[DashboardExpiringPedido] = []
     expirados_recentes: list[DashboardExpiringPedido] = []
 
-    for pedido, produto_nome, usuario_nome, usuario_tid, instrucoes_especificas in session.exec(stmt_pedidos).all():
+    for pedido, produto_nome, usuario_nome, usuario_tid, estoque_login, instrucoes_especificas, conta_mae_login in session.exec(stmt_pedidos).all():
         data_expiracao, origem_expiracao = resolver_data_expiracao_pedido(
             session=session,
             pedido_id=pedido.id,
@@ -482,6 +485,8 @@ def get_dashboard_analitico(
             produto_nome=produto_nome,
             usuario_nome_completo=usuario_nome,
             usuario_telegram_id=usuario_tid,
+            conta_login=conta_mae_login or estoque_login,
+            tipo_conta="conta_mae" if conta_mae_login else ("estoque" if estoque_login else None),
             email_cliente=pedido.email_cliente,
             entrega_info=instrucoes_especificas or pedido.email_cliente,
             data_expiracao=data_expiracao,

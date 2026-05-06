@@ -111,6 +111,8 @@ class DashboardExpiringPedido(SQLModel):
     produto_nome: str
     usuario_nome_completo: str
     usuario_telegram_id: int
+    conta_login: str | None = None
+    tipo_conta: str | None = None
     email_cliente: str | None = None
     entrega_info: str | None = None
     data_expiracao: datetime.date
