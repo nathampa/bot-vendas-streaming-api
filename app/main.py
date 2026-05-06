@@ -23,6 +23,7 @@ from app.models.pedido_models import Pedido
 from app.models.produto_models import EstoqueConta, Produto
 from app.models.suporte_models import GiftCard, TicketSuporte
 from app.models.usuario_models import AjusteSaldoUsuario, RecargaSaldo, SugestaoStreaming, Usuario
+from app.schemas.auth_schemas import AdminProfileRead
 from app.schemas.compra_schemas import CompraCreateRequest, CompraCreateResponse
 from app.schemas.conta_mae_schemas import (
     ContaMaeAdminDetails,
@@ -125,6 +126,7 @@ OpenAIAccountCreationBatchCreateResponse.model_rebuild()
 OpenAIAccountCreationJobRead.model_rebuild()
 OpenAIAccountCreationOTPSubmitRequest.model_rebuild()
 OpenAIAccountCreationRetryResponse.model_rebuild()
+AdminProfileRead.model_rebuild()
 print("Modelos e schemas reconstruídos com sucesso.")
 
 _scheduler_stop_event = threading.Event()

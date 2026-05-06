@@ -2,13 +2,28 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
 
+from app.api.v1.deps import get_current_admin_user
 from app.db.database import get_session
 from app.models.usuario_models import Usuario
-from app.schemas.auth_schemas import Token
+from app.schemas.auth_schemas import AdminProfileRead, Token
 from app.services import security
 from app.services.email_monitor_service import log_audit
 
 router = APIRouter()
+
+
+@router.get("/me", response_model=AdminProfileRead, tags=["Admin - Autenticação"])
+def get_admin_me(
+    current_admin: Usuario = Depends(get_current_admin_user),
+):
+    return AdminProfileRead(
+        id=current_admin.id,
+        nome_completo=current_admin.nome_completo,
+        email=current_admin.email,
+        telegram_id=current_admin.telegram_id,
+        is_admin=current_admin.is_admin,
+        criado_em=current_admin.criado_em,
+    )
 
 
 @router.post(

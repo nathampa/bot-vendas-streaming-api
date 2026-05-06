@@ -12,6 +12,59 @@ class DashboardKPIs(SQLModel):
     novos_usuarios_24h: int
     tickets_abertos: int
 
+
+class DashboardMoneyMetric(SQLModel):
+    value: Decimal
+    delta_percent: float | None = None
+
+
+class DashboardIntMetric(SQLModel):
+    value: int
+    delta_percent: float | None = None
+
+
+class DashboardOverviewKPIs(SQLModel):
+    receita_24h: DashboardMoneyMetric
+    vendas_24h: DashboardIntMetric
+    contas_ativas: DashboardIntMetric
+    alertas: DashboardIntMetric
+
+
+class DashboardRevenueSeriesPoint(SQLModel):
+    date: datetime.date
+    label: str
+    revenue: Decimal
+    orders: int
+
+
+class DashboardHourlyActivityPoint(SQLModel):
+    hour_start: datetime.datetime
+    label: str
+    orders: int
+
+
+class DashboardDistributionPoint(SQLModel):
+    name: str
+    value: int
+
+
+class DashboardSystemStatus(SQLModel):
+    status: str
+    database_status: str
+    server_time: datetime.datetime
+    api_started_at: datetime.datetime
+    uptime_seconds: int
+    uptime_label: str
+
+
+class DashboardOverview(SQLModel):
+    period_days: int
+    kpis: DashboardOverviewKPIs
+    revenue_series: list[DashboardRevenueSeriesPoint]
+    hourly_activity: list[DashboardHourlyActivityPoint]
+    account_distribution: list[DashboardDistributionPoint]
+    system_status: DashboardSystemStatus
+
 # -----------------------------------------------------------------
 # Schema para a lista de "Top Produtos"
 # -----------------------------------------------------------------

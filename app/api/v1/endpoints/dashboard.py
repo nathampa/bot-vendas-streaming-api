@@ -7,6 +7,7 @@ from sqlalchemy import func # Importamos 'func' para usar 'func.count' e 'func.s
 from typing import List
 
 from app.db.database import get_session
+from app.core.runtime import API_STARTED_AT
 from app.models.usuario_models import Usuario
 from app.models.pedido_models import Pedido
 from app.models.produto_models import Produto, EstoqueConta
@@ -15,9 +16,17 @@ from app.models.suporte_models import TicketSuporte
 from app.models.base import StatusEntregaPedido, TipoStatusTicket
 from app.schemas.dashboard_schemas import (
     DashboardAnalitico,
+    DashboardDistributionPoint,
     DashboardExpiringPedido,
+    DashboardHourlyActivityPoint,
     DashboardKPIs,
+    DashboardIntMetric,
+    DashboardMoneyMetric,
     DashboardOperationalHealth,
+    DashboardOverview,
+    DashboardOverviewKPIs,
+    DashboardRevenueSeriesPoint,
+    DashboardSystemStatus,
     DashboardTopProduto,
     DashboardEstoqueBaixo,
     DashboardRecentPedido
@@ -29,6 +38,221 @@ from app.services.pedido_expiracao_service import resolver_data_expiracao_pedido
 router = APIRouter(dependencies=[Depends(get_current_admin_user)])
 
 # --- ENDPOINTS DE DASHBOARD ---
+
+def _decimal_or_zero(value) -> Decimal:
+    return value or Decimal("0.0")
+
+
+def _delta_percent(current: Decimal | int, previous: Decimal | int) -> float | None:
+    if previous == 0:
+        return None
+    return round(float((Decimal(current) - Decimal(previous)) / Decimal(previous) * Decimal("100")), 1)
+
+
+def _format_uptime(seconds: int) -> str:
+    days, remainder = divmod(seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, _ = divmod(remainder, 60)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+def _get_system_status(session: Session) -> DashboardSystemStatus:
+    server_time = datetime.datetime.utcnow()
+    uptime_seconds = max(0, int((server_time - API_STARTED_AT).total_seconds()))
+    database_status = "ok"
+    try:
+        session.exec(select(1)).first()
+    except Exception:
+        database_status = "error"
+
+    return DashboardSystemStatus(
+        status="operational" if database_status == "ok" else "degraded",
+        database_status=database_status,
+        server_time=server_time,
+        api_started_at=API_STARTED_AT,
+        uptime_seconds=uptime_seconds,
+        uptime_label=_format_uptime(uptime_seconds),
+    )
+
+
+@router.get("/system-status", response_model=DashboardSystemStatus)
+def get_dashboard_system_status(
+    *,
+    session: Session = Depends(get_session),
+):
+    """
+    [ADMIN] Retorna saúde operacional real do processo da API.
+    """
+    return _get_system_status(session)
+
+
+@router.get("/overview", response_model=DashboardOverview)
+def get_dashboard_overview(
+    *,
+    session: Session = Depends(get_session),
+    period_days: int = 7,
+):
+    """
+    [ADMIN] Retorna agregados reais para os cards e gráficos do dashboard.
+    """
+    if period_days not in (7, 30, 90):
+        period_days = 7
+
+    now = datetime.datetime.utcnow()
+    current_24h_start = now - datetime.timedelta(hours=24)
+    previous_24h_start = now - datetime.timedelta(hours=48)
+
+    current_revenue = _decimal_or_zero(
+        session.exec(select(func.sum(Pedido.valor_pago)).where(Pedido.criado_em >= current_24h_start)).first()
+    )
+    previous_revenue = _decimal_or_zero(
+        session.exec(
+            select(func.sum(Pedido.valor_pago)).where(
+                Pedido.criado_em >= previous_24h_start,
+                Pedido.criado_em < current_24h_start,
+            )
+        ).first()
+    )
+
+    current_orders = session.exec(
+        select(func.count(Pedido.id)).where(Pedido.criado_em >= current_24h_start)
+    ).first() or 0
+    previous_orders = session.exec(
+        select(func.count(Pedido.id)).where(
+            Pedido.criado_em >= previous_24h_start,
+            Pedido.criado_em < current_24h_start,
+        )
+    ).first() or 0
+
+    active_stock_accounts = session.exec(
+        select(func.count(EstoqueConta.id)).where(EstoqueConta.is_ativo == True)
+    ).first() or 0
+    active_parent_accounts = session.exec(
+        select(func.count(ContaMae.id)).where(ContaMae.is_ativo == True)
+    ).first() or 0
+    tickets_abertos = session.exec(
+        select(func.count(TicketSuporte.id)).where(TicketSuporte.status == TipoStatusTicket.ABERTO)
+    ).first() or 0
+
+    today = datetime.date.today()
+    delivered_orders = session.exec(
+        select(Pedido).where(Pedido.status_entrega == StatusEntregaPedido.ENTREGUE)
+    ).all()
+    vencendo_hoje = 0
+    for pedido in delivered_orders:
+        data_expiracao, _ = resolver_data_expiracao_pedido(
+            session=session,
+            pedido_id=pedido.id,
+            email_cliente=pedido.email_cliente,
+            estoque_conta_id=pedido.estoque_conta_id,
+            conta_mae_id=pedido.conta_mae_id,
+        )
+        if data_expiracao and data_expiracao == today:
+            vencendo_hoje += 1
+
+    period_start_date = today - datetime.timedelta(days=period_days - 1)
+    period_start_datetime = datetime.datetime.combine(period_start_date, datetime.time.min)
+    revenue_rows = session.exec(
+        select(
+            func.date(Pedido.criado_em).label("dia"),
+            func.sum(Pedido.valor_pago).label("revenue"),
+            func.count(Pedido.id).label("orders"),
+        )
+        .where(Pedido.criado_em >= period_start_datetime)
+        .group_by(func.date(Pedido.criado_em))
+        .order_by(func.date(Pedido.criado_em))
+    ).all()
+    revenue_by_day = {
+        row.dia: {
+            "revenue": _decimal_or_zero(row.revenue),
+            "orders": int(row.orders or 0),
+        }
+        for row in revenue_rows
+    }
+    revenue_series: list[DashboardRevenueSeriesPoint] = []
+    for offset in range(period_days):
+        day = period_start_date + datetime.timedelta(days=offset)
+        data = revenue_by_day.get(day, {"revenue": Decimal("0.0"), "orders": 0})
+        revenue_series.append(
+            DashboardRevenueSeriesPoint(
+                date=day,
+                label=day.strftime("%d/%m"),
+                revenue=data["revenue"],
+                orders=data["orders"],
+            )
+        )
+
+    hourly_start = now.replace(minute=0, second=0, microsecond=0) - datetime.timedelta(hours=23)
+    hourly_rows = session.exec(
+        select(
+            func.date_trunc("hour", Pedido.criado_em).label("hour_start"),
+            func.count(Pedido.id).label("orders"),
+        )
+        .where(Pedido.criado_em >= hourly_start)
+        .group_by(func.date_trunc("hour", Pedido.criado_em))
+        .order_by(func.date_trunc("hour", Pedido.criado_em))
+    ).all()
+    orders_by_hour = {row.hour_start.replace(tzinfo=None): int(row.orders or 0) for row in hourly_rows}
+    hourly_activity: list[DashboardHourlyActivityPoint] = []
+    for offset in range(24):
+        hour_start = hourly_start + datetime.timedelta(hours=offset)
+        hourly_activity.append(
+            DashboardHourlyActivityPoint(
+                hour_start=hour_start,
+                label=hour_start.strftime("%Hh"),
+                orders=orders_by_hour.get(hour_start, 0),
+            )
+        )
+
+    stock_distribution_rows = session.exec(
+        select(Produto.nome.label("name"), func.count(EstoqueConta.id).label("value"))
+        .join(Produto, EstoqueConta.produto_id == Produto.id)
+        .where(EstoqueConta.is_ativo == True)
+        .group_by(Produto.nome)
+    ).all()
+    parent_distribution_rows = session.exec(
+        select(Produto.nome.label("name"), func.count(ContaMae.id).label("value"))
+        .join(Produto, ContaMae.produto_id == Produto.id)
+        .where(ContaMae.is_ativo == True)
+        .group_by(Produto.nome)
+    ).all()
+    distribution_map: dict[str, int] = {}
+    for row in [*stock_distribution_rows, *parent_distribution_rows]:
+        distribution_map[row.name] = distribution_map.get(row.name, 0) + int(row.value or 0)
+    account_distribution = [
+        DashboardDistributionPoint(name=name, value=value)
+        for name, value in sorted(distribution_map.items(), key=lambda item: item[1], reverse=True)[:6]
+    ]
+
+    return DashboardOverview(
+        period_days=period_days,
+        kpis=DashboardOverviewKPIs(
+            receita_24h=DashboardMoneyMetric(
+                value=current_revenue,
+                delta_percent=_delta_percent(current_revenue, previous_revenue),
+            ),
+            vendas_24h=DashboardIntMetric(
+                value=int(current_orders),
+                delta_percent=_delta_percent(int(current_orders), int(previous_orders)),
+            ),
+            contas_ativas=DashboardIntMetric(
+                value=int(active_stock_accounts + active_parent_accounts),
+                delta_percent=None,
+            ),
+            alertas=DashboardIntMetric(
+                value=int(tickets_abertos + vencendo_hoje),
+                delta_percent=None,
+            ),
+        ),
+        revenue_series=revenue_series,
+        hourly_activity=hourly_activity,
+        account_distribution=account_distribution,
+        system_status=_get_system_status(session),
+    )
 
 @router.get("/kpis", response_model=DashboardKPIs)
 def get_dashboard_kpis(
